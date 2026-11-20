@@ -109,6 +109,19 @@ jobs:
           name: ${{ matrix.edition.id }}-apk
           path: out/*.apk
 
+      - name: The permanent link (always the newest)
+        # releases/download/<edition>-latest/<edition>.apk: the address on the website and on any QR code
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp "out/${EDITION}-${INK_TAG#v}.apk" "out/${EDITION}.apk"
+          gh release view "${EDITION}-latest" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
+            gh release create "${EDITION}-latest" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
+              --title "${EDITION_NAME}: the newest" --notes "${EDITION_NAME}'s newest build, always at this address. Every build is also kept as its own release."
+          gh release upload "${EDITION}-latest" "out/${EDITION}.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          rm "out/${EDITION}.apk"
+
       - name: Publish (Releases)
         if: github.ref_name == github.event.repository.default_branch
         env:
@@ -131,10 +144,9 @@ jobs:
       fail-fast: false
       matrix:
         edition:
-          - { id: neon-coast, shots: neon-coast, pkg: app.ink.music.sunset, home: cruise, settings: safehouse, api: 34, profile: "", rotate: "" }
-          - { id: vigil, shots: vigil, pkg: app.ink.music.vigil, home: the beat, settings: hideout, api: 34, profile: "", rotate: "" }
-          # a tablet held sideways, told (as Android 16 does on its own) to turn whatever an app asks
-          - { id: vigil, shots: vigil-tablet, pkg: app.ink.music.vigil, home: the beat, settings: hideout, api: 34, profile: pixel_tablet, rotate: "1" }
+          # a phone's size (a Pixel 7, 1080 x 2400): the pictures are sharp enough for the website
+          - { id: neon-coast, shots: neon-coast, pkg: app.ink.music.sunset, home: cruise, settings: safehouse, radio: airwaves, artist: Neon Coast, api: 34, profile: pixel_7, rotate: "" }
+          - { id: vigil, shots: vigil, pkg: app.ink.music.vigil, home: the beat, settings: hideout, radio: night radio, artist: Vigil, api: 34, profile: pixel_7, rotate: "" }
     env:
       EDITION: ${{ matrix.edition.id }}
       SHOTS: ${{ matrix.edition.shots }}
@@ -142,6 +154,8 @@ jobs:
       PKG: ${{ matrix.edition.pkg }}
       HOME_WORD: ${{ matrix.edition.home }}
       SETTINGS_WORD: ${{ matrix.edition.settings }}
+      RADIO_WORD: ${{ matrix.edition.radio }}
+      ARTIST: ${{ matrix.edition.artist }}
     steps:
       - name: Get the script (this repo)
         uses: actions/checkout@v5
@@ -163,7 +177,7 @@ jobs:
           command -v ffmpeg > /dev/null || { sudo apt-get update -q && sudo apt-get install -y -q ffmpeg; }
           mkdir -p music
           ffmpeg -loglevel error -f lavfi -i "sine=frequency=220:duration=240" -f lavfi -i "sine=frequency=330:duration=240" \
-            -filter_complex amix=inputs=2 -metadata title="Night Drive" -metadata artist="The Test Tones" -metadata album="After Dark" \
+            -filter_complex amix=inputs=2 -metadata title="Night Drive" -metadata artist="$ARTIST" -metadata album="After Dark" \
             -c:a libmp3lame -b:a 128k music/night-drive.mp3
 
       - name: Screens

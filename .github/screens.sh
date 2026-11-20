@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Screenshots of the built app on an emulator: install it, give it a song, tap through the welcome by the words on
 # screen, then the home page, the places menu, the tracks, the player and settings. Run inside the emulator step.
-# From the workflow: PKG (the app), HOME_WORD (its first place's name), SETTINGS_WORD (its name for settings).
+# From the workflow: PKG (the app), HOME_WORD (its first place's name), SETTINGS_WORD (its name for settings),
+# RADIO_WORD (its name for radio).
 set -u
 PKG=${PKG:-app.ink.music.sunset}
 HOME_WORD=${HOME_WORD:-cruise}
 SETTINGS_WORD=${SETTINGS_WORD:-safehouse}
+RADIO_WORD=${RADIO_WORD:-airwaves}
 OUT=shots
 mkdir -p "$OUT"
 
@@ -41,6 +43,12 @@ for want in sys.argv[1:]:
             print(x, y); sys.exit(0)
 sys.exit(1)
 PY
+}
+# a swipe up the screen's middle, from three quarters down to a quarter, whatever the screen's size
+swipe_up() {
+  local size w h
+  size=$(adb shell wm size | tail -1 | grep -oE '[0-9]+x[0-9]+'); w=${size%x*}; h=${size#*x}
+  adb shell input swipe $((w / 2)) $((h * 3 / 4)) $((w / 2)) $((h / 4)) 400
 }
 tap() { local at; at=$(find_text "$@") || { echo "not on screen: $*"; return 1; }; echo "tap $1 at $at"; adb shell input tap $at; }
 # the emulator's own pop-ups over the app (a launcher not responding, the taskbar's tip): out of the way first
@@ -90,11 +98,17 @@ tap tracks && shot 05-tracks 5
 clear_pops; tap "night drive" && shot 06-playing 5
 # the player: from the mini player, the lowest "night drive" on screen
 clear_pops; PICK=last tap "night drive" && shot 07-player 6
-adb shell input swipe 160 480 160 160 300 && shot 08-player-more 3
+swipe_up && shot 08-player-more 3
 adb shell input keyevent KEYCODE_BACK; sleep 3
 clear_pops; shot 09-back 1
-# settings: the place's word at the top opens the menu; settings is at its foot
+# the radio: the place's word at the top opens the menu
 tap tracks "$HOME_WORD" && shot 10-menu-again 3
-tap "$SETTINGS_WORD" && shot 11-settings 5
-adb shell input swipe 160 520 160 120 400 && shot 12-settings-more 3
+tap "$RADIO_WORD" && shot 11-radio 10
+swipe_up && shot 12-radio-more 4
+# settings, at the menu's foot; its sound, and the equalizer with its headphones
+tap "$RADIO_WORD" "$HOME_WORD" tracks && sleep 3
+tap "$SETTINGS_WORD" && shot 13-settings 5
+tap sound && shot 14-sound 4
+tap "open it" && shot 15-equalizer 5
+swipe_up && shot 16-equalizer-more 3
 ls -l "$OUT"
