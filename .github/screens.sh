@@ -141,6 +141,19 @@ if tap find; then
   sleep 2; adb shell input text "blinding%slights"
   shot 03b-find-2s 2; shot 03c-find-6s 4
   adb logcat -d -s ink-youtube:D ink-spotify:I | tail -40 > "$OUT/find-log.txt"
+  # the song kept as it plays (StreamCache): played, then played again from its start, the second read from the phone
+  if at=$(find_text "the weeknd"); then
+    x=${at% *}; y=${at#* }; y=$((y - 30))
+    adb logcat -c
+    adb shell input keyevent KEYCODE_BACK; sleep 1   # the keyboard away
+    at=$(find_text "the weeknd") && { x=${at% *}; y=$(( ${at#* } - 30 )); }
+    echo "play at $x $y"; adb shell input tap $x $y
+    sleep 30; shot 03d-song-playing 1
+    adb shell input tap $x $y
+    sleep 12
+    adb logcat -d -s ink-cache:* ink-youtube:I | tail -60 > "$OUT/cache-log.txt"
+    grep -c "played from the phone" "$OUT/cache-log.txt" | sed 's/^/reads from the phone: /'
+  fi
   adb shell input keyevent KEYCODE_BACK; sleep 1; adb shell input keyevent KEYCODE_BACK; sleep 2
 fi
 clear_pops

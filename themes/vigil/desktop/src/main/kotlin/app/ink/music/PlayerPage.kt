@@ -826,9 +826,7 @@ fun RemotePlayerPage(o: Continue.Offer, open: (Page) -> Unit, onClose: () -> Uni
                             Spacer(Modifier.weight(1f))
                             if (length > 0 && !o.song.station) BasicText("-" + clock((length - pos).coerceAtLeast(0L)), style = pixel(12.sp, Ink.mid))
                         }
-                        Box(Modifier.width(side).height(1.dp).background(Ink.line)) {
-                            if (length > 0 && !o.song.station) Box(Modifier.fillMaxWidth((pos.toFloat() / length).coerceIn(0f, 1f)).height(1.dp).background(accent))
-                        }
+                        SteerLine(o, pos, accent, Modifier.width(side))
                         Box(Modifier.size(side + off)) {
                             if (!o.song.station && CoverPrint.on.collectAsState().value != Print.CLEAR) Dithered(o.song, Modifier.offset(off, off).size(side), px = 1200)
                             CoverOf(o.song, o.song.album.ifEmpty { o.song.title }, Modifier.size(side), px = 1200, moving = o.playing)
@@ -851,9 +849,12 @@ fun RemotePlayerPage(o: Continue.Offer, open: (Page) -> Unit, onClose: () -> Uni
                                 SyncHub.steer(o.peer, if (o.playing) "pause" else "play")
                             }
                             Pixel(NEXT, "next, there", Ink.mid, cell = 3.dp) { SyncHub.steer(o.peer, "next") }
+                            Word("quieter", pixel(13.sp, Ink.mid), touch = 8.dp) { SyncHub.steer(o.peer, "volume", -8) }
+                            Word("louder", pixel(13.sp, Ink.mid), touch = 8.dp) { SyncHub.steer(o.peer, "volume", 8) }
                             Spacer(Modifier.width(12.dp))
                             Word("CONTINUE HERE", headline(26.sp), touch = 10.dp) { Continue.take(o) }
                         }
+                        Unheard(o)
                         Spacer(Modifier.height(18.dp))
                         Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.line))
                         Spacer(Modifier.height(14.dp))

@@ -549,7 +549,13 @@ private fun App() {
             // songs picked: what to do with them all, in the mini player's place
             if (picking && !playerUp) PickBar(pages)
             else if (!stopping && !sideways() && !playingNow && elsewhere != null) Box(if (onTv()) Modifier.covered(playerUp) else Modifier) { RemoteMini(frost, elsewhere, onOpen = { remoteUp = true }) }
-            else if (!stopping && !sideways() && (!onTv() || playingNow)) Box(if (onTv()) Modifier.covered(playerUp) else Modifier) { MiniPlayer(frost, onOpen = { playerUp = true }) }
+            else if (!stopping && !sideways() && (!onTv() || playingNow)) Box(if (onTv()) Modifier.covered(playerUp) else Modifier) {
+                Column {
+                    // playing elsewhere too (the editions', 2026-11-21): its bar over this one's, seen and steered from here
+                    if (!onTv() && elsewhere?.playing == true) RemoteMini(frost, elsewhere, onOpen = { remoteUp = true })
+                    MiniPlayer(frost, onOpen = { playerUp = true })
+                }
+            }
         }
         androidx.compose.animation.AnimatedVisibility(
             playerUp,

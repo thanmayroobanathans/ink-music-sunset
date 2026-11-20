@@ -675,6 +675,86 @@ index 5f45068..2239411 100644
  
  /** 1-bit mode: every cover in the dither, its own colour, for the run (the clickwheel three turns backwards; again turns it off). */
  object OneBit { val on = MutableStateFlow(false) }
+diff --git a/app/src/main/java/app/ink/music/Everywhere.kt b/app/src/main/java/app/ink/music/Everywhere.kt
+index ed18acb..e07249f 100644
+--- a/app/src/main/java/app/ink/music/Everywhere.kt
++++ b/app/src/main/java/app/ink/music/Everywhere.kt
+@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
+ import androidx.compose.runtime.remember
+ import androidx.compose.foundation.interaction.MutableInteractionSource
+ import androidx.compose.foundation.clickable
++import androidx.compose.foundation.gestures.detectTapGestures
++import androidx.compose.ui.input.pointer.pointerInput
+ import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Row
+@@ -65,6 +67,8 @@ object Everywhere {
+     data class Remote(
+         val peer: String, val name: String, val device: String, val steerable: Boolean,
+         val songs: List<Song>, val index: Int, val position: Long, val heard: Long, val playing: Boolean, val told: Long = 0L,
++        /** Each of [songs]' place in the queue there, from the one playing (a song not found here is left out of [songs]). */
++        val places: List<Int> = emptyList(),
+     ) {
+         val song: Song get() = songs[index]
+         /** The song's length: its own, else what the player playing it says (a YouTube record's songs come without). */
+@@ -104,17 +108,19 @@ object Everywhere {
+         val q = now.optJSONArray("queue") ?: return null
+         val index = now.optInt("index")
+         val songs = ArrayList<Song>(); var at = -1
++        val places = ArrayList<Int>()
+         for (i in 0 until q.length()) {
+             val s = q.optJSONObject(i)?.let(SyncPhone::resolve) ?: continue
+             if (i == index) at = songs.size
+             songs += s
++            places += i - index
+         }
+         if (songs.isEmpty() || at < 0) return null
+         val id = e.optString("id")
+         // steered directly where it's a peer of this one (a phone's are all devices that listen; a TV's phones
+         // through their waiting call)
+         val steerable = peers[id] != null
+-        return Remote(id, e.optString("name"), now.optString("device"), steerable, songs, at, now.optLong("position"), e.optLong("heard"), now.optBoolean("playing"), now.optLong("length"))
++        return Remote(id, e.optString("name"), now.optString("device"), steerable, songs, at, now.optLong("position"), e.optLong("heard"), now.optBoolean("playing"), now.optLong("length"), places)
+     }
+ 
+     // ---- a phone: waiting on each device that listens, while ink music is open ----
+@@ -251,6 +257,7 @@ fun RemoteMini(frost: HazeState, r: Everywhere.Remote, onOpen: () -> Unit) {
+                 if (r.steerable) Word(if (r.playing) "pause" else "play", pixel(14.sp, Ink.mid), Modifier.padding(start = 12.dp), touch = 10.dp) {
+                     Everywhere.steer(r, if (r.playing) "pause" else "play")
+                 }
++                if (r.steerable) Word("next", pixel(14.sp, Ink.mid), Modifier.padding(start = 10.dp), touch = 10.dp) { Everywhere.steer(r, "next") }
+                 Word("play here", pixel(14.sp), Modifier.padding(start = 6.dp), touch = 10.dp) { Everywhere.take(r) }
+             }
+         }
+@@ -295,9 +302,13 @@ fun RemotePlayerPage(r: Everywhere.Remote, onClose: () -> Unit) {
+                         BasicText(clock(pos), style = pixel(12.sp, Ink.mid), modifier = Modifier.weight(1f))
+                         if (length > 0 && !r.song.station) BasicText("-" + clock((length - pos).coerceAtLeast(0)), style = pixel(12.sp, Ink.mid))
+                     }
+-                    Spacer(Modifier.height(6.dp))
+-                    Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.line)) {
+-                        if (length > 0 && !r.song.station) Box(Modifier.fillMaxWidth((pos.toFloat() / length).coerceIn(0f, 1f)).height(1.dp).background(cover?.accent ?: Ink.ink))
++                    // the line, a tap on it the place to go to there (the editions', 2026-11-21)
++                    Box(Modifier.fillMaxWidth().height(24.dp).then(if (r.steerable && length > 0 && !r.song.station) Modifier.pointerInput(r.peer, length) {
++                        detectTapGestures { at -> Everywhere.steer(r, "seek", (at.x / size.width * length).toLong().coerceIn(0L, length)) }
++                    } else Modifier), contentAlignment = Alignment.Center) {
++                        Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.line)) {
++                            if (length > 0 && !r.song.station) Box(Modifier.fillMaxWidth((pos.toFloat() / length).coerceIn(0f, 1f)).height(1.dp).background(cover?.accent ?: Ink.ink))
++                        }
+                     }
+                     CoverOf(r.song, r.song.album.ifEmpty { r.song.title }, Modifier.size(side))
+                     Spacer(Modifier.height(16.dp))
+@@ -313,6 +324,11 @@ fun RemotePlayerPage(r: Everywhere.Remote, onClose: () -> Unit) {
+                     Pixel(NEXT, "next, there", Ink.ink, cell = 3.dp) { Everywhere.steer(r, "next") }
+                 }
+             }
++            // its volume, there
++            if (r.steerable) Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center) {
++                Word("quieter", pixel(14.sp, Ink.mid), Modifier.padding(end = 28.dp), touch = 10.dp) { Everywhere.steer(r, "volume", -8) }
++                Word("louder", pixel(14.sp, Ink.mid), touch = 10.dp) { Everywhere.steer(r, "volume", 8) }
++            }
+             // the player's second row, as on this phone's own: what plays there after this
+             Spacer(Modifier.height(10.dp))
+             Word("up next", pixel(14.sp, Ink.ink.copy(alpha = .75f)), Modifier.align(Alignment.CenterHorizontally), touch = 10.dp) { queueUp = true }
 diff --git a/app/src/main/java/app/ink/music/Frost.kt b/app/src/main/java/app/ink/music/Frost.kt
 index c1d5001..2caf8cd 100644
 --- a/app/src/main/java/app/ink/music/Frost.kt
@@ -867,7 +947,7 @@ index 6396aeb..93a2427 100644
  /**
   * A song's heart, as on the desktop: 17% while not loved; loving it, red with a soft red glow for
 diff --git a/app/src/main/java/app/ink/music/Main.kt b/app/src/main/java/app/ink/music/Main.kt
-index dc12dfd..9deb96c 100644
+index dc12dfd..7b8b28a 100644
 --- a/app/src/main/java/app/ink/music/Main.kt
 +++ b/app/src/main/java/app/ink/music/Main.kt
 @@ -159,9 +159,15 @@ class Main : ComponentActivity() {
@@ -925,7 +1005,22 @@ index dc12dfd..9deb96c 100644
      var playerUp by rememberSaveable { mutableStateOf(false) }
      // what plays on another device, opened from its bar ([RemotePlayerPage])
      var remoteUp by remember { mutableStateOf(false) }
-@@ -894,7 +907,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -536,7 +549,13 @@ private fun App() {
+             // songs picked: what to do with them all, in the mini player's place
+             if (picking && !playerUp) PickBar(pages)
+             else if (!stopping && !sideways() && !playingNow && elsewhere != null) Box(if (onTv()) Modifier.covered(playerUp) else Modifier) { RemoteMini(frost, elsewhere, onOpen = { remoteUp = true }) }
+-            else if (!stopping && !sideways() && (!onTv() || playingNow)) Box(if (onTv()) Modifier.covered(playerUp) else Modifier) { MiniPlayer(frost, onOpen = { playerUp = true }) }
++            else if (!stopping && !sideways() && (!onTv() || playingNow)) Box(if (onTv()) Modifier.covered(playerUp) else Modifier) {
++                Column {
++                    // playing elsewhere too (the editions', 2026-11-21): its bar over this one's, seen and steered from here
++                    if (!onTv() && elsewhere?.playing == true) RemoteMini(frost, elsewhere, onOpen = { remoteUp = true })
++                    MiniPlayer(frost, onOpen = { playerUp = true })
++                }
++            }
+         }
+         androidx.compose.animation.AnimatedVisibility(
+             playerUp,
+@@ -894,7 +913,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
                  verticalAlignment = Alignment.CenterVertically) {
                  androidx.compose.animation.AnimatedContent(tab, label = "place",
                      transitionSpec = { androidx.compose.animation.fadeIn(tween(Motion.ENTER, easing = Motion.expo)) togetherWith androidx.compose.animation.fadeOut(tween(Motion.EXIT)) },
@@ -934,7 +1029,7 @@ index dc12dfd..9deb96c 100644
                  Spacer(Modifier.width(10.dp))
                  // the menu's chevron: down while shut, up while open
                  val turn by androidx.compose.animation.core.animateFloatAsState(if (menu) 180f else 0f, tween(Motion.ENTER, easing = Motion.expo), label = "chevron")
-@@ -922,7 +935,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -922,7 +941,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
              }
              when (key) {
                  Hints.PULL -> Typed("pull down to find anything", pixel(12.sp, Ink.mid), hint)
@@ -943,7 +1038,7 @@ index dc12dfd..9deb96c 100644
                  Hints.ACROSS -> Typed("swipe across for the place beside", pixel(12.sp, Ink.mid), hint)
                  Hints.TURN -> Typed("turn your phone sideways for a wall of covers", pixel(12.sp, Ink.mid), hint)
                  Hints.ORDER -> Typed("tap an order to change it: year, color, lately", pixel(12.sp, Ink.mid), hint)
-@@ -934,6 +947,8 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -934,6 +953,8 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
              }
          }
        }
@@ -952,7 +1047,7 @@ index dc12dfd..9deb96c 100644
        Box(Modifier.fillMaxWidth().height(BAND).softEdge(tabsFrost, towardBottom = false))
      }
      // the places, dropped down under the word: big, the one you're on lit, each arriving in turn; a tap goes there (on
-@@ -954,14 +969,14 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -954,14 +975,14 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
          ) {
              tabs.forEachIndexed { i, t ->
                  // a TV's screen is short: the places a size smaller, so all of them and settings sit above the mini player
@@ -969,7 +1064,7 @@ index dc12dfd..9deb96c 100644
              Word("your year", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size + 1, menu), touch = 8.dp) { menu = false; pages.open(Page.Year) }
              Word("ink mapped", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size + 2, menu), touch = 8.dp) { menu = false; pages.open(Page.Mapped) }
              // pairing a computer a tap from anywhere, not deep in settings; once one's paired, its name opens its setting
-@@ -1002,9 +1017,16 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -1002,9 +1023,16 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
      }
  }
  
@@ -988,7 +1083,7 @@ index dc12dfd..9deb96c 100644
  
  /**
   * The pager's fling, but none when it's still and on its page. A row of covers flung to its end hands the
-@@ -1458,7 +1480,7 @@ private fun LovedPage(pages: Pages) {
+@@ -1458,7 +1486,7 @@ private fun LovedPage(pages: Pages) {
   * once (a second tap made a second playlist), then "open it".
   */
  @Composable
@@ -997,7 +1092,7 @@ index dc12dfd..9deb96c 100644
      val scope = rememberCoroutineScope()
      // where it's being made ("youtube", "server"), and once made, the page that opens it
      var making by remember(name, found) { mutableStateOf<String?>(null) }
-@@ -1487,7 +1509,7 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
+@@ -1487,7 +1515,7 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
          }
      }
      if (who != null) Place("youtube", "youtube music") {
@@ -1006,7 +1101,7 @@ index dc12dfd..9deb96c 100644
              ?: run { said = "youtube music didn't take it"; false to null }
      }
      if (account != null) Place("server", "your server") {
-@@ -1671,7 +1693,7 @@ private fun ArtistPage(name: String, pages: Pages, tubeId: String = "") {
+@@ -1671,7 +1699,7 @@ private fun ArtistPage(name: String, pages: Pages, tubeId: String = "") {
                      // as it is (or in the grain), a light photo held down so the name on it reads (nameDim)
                      if (!dithered && !xray && c != null) {
                          val dim = remember(c) { nameDim(c.image) }
@@ -1015,7 +1110,7 @@ index dc12dfd..9deb96c 100644
                      }
                  }
                  else Box(Modifier.size(side).align(Alignment.Center))
-@@ -2096,18 +2118,29 @@ private fun ImportPage(pages: Pages) {
+@@ -2096,18 +2124,29 @@ private fun ImportPage(pages: Pages) {
      var progress by remember { mutableStateOf(0) }
      var matched by remember { mutableStateOf<List<Song?>?>(null) }
      var said by remember { mutableStateOf<String?>(null) }
@@ -1052,7 +1147,7 @@ index dc12dfd..9deb96c 100644
      LaunchedEffect(spotifyAt) {
          if (!Spotify.ready()) return@LaunchedEffect
          if (theirs == null) theirs = Spotify.playlists() ?: run { said = "spotify didn't say. sign in again"; null }
-@@ -2115,7 +2148,7 @@ private fun ImportPage(pages: Pages) {
+@@ -2115,7 +2154,7 @@ private fun ImportPage(pages: Pages) {
              reading = 0
              val songs = Spotify.songs(w.id) { reading = it }
              reading = null; wanted = null
@@ -1061,7 +1156,7 @@ index dc12dfd..9deb96c 100644
          }
      }
      fun open(w: Import.Theirs) {
-@@ -2125,7 +2158,7 @@ private fun ImportPage(pages: Pages) {
+@@ -2125,7 +2164,7 @@ private fun ImportPage(pages: Pages) {
              reading = 0
              val songs = Spotify.songs(w.id) { reading = it }
              reading = null; wanted = null
@@ -1070,7 +1165,7 @@ index dc12dfd..9deb96c 100644
          } else Spotify.signIn(ctx)
      }
      LaunchedEffect(chosen) {
-@@ -2143,39 +2176,21 @@ private fun ImportPage(pages: Pages) {
+@@ -2143,39 +2182,21 @@ private fun ImportPage(pages: Pages) {
              BasicText((c?.name ?: "FROM SPOTIFY").uppercase(), style = headline(40.sp), maxLines = 3, overflow = TextOverflow.Ellipsis)
              Spacer(Modifier.height(10.dp))
              when {
@@ -1123,7 +1218,7 @@ index dc12dfd..9deb96c 100644
                  }
                  m == null -> {
                      // a line filling as they're found, as the player's fills with the song
-@@ -2192,7 +2207,28 @@ private fun ImportPage(pages: Pages) {
+@@ -2192,7 +2213,28 @@ private fun ImportPage(pages: Pages) {
                      BasicText("${found.size} of ${c.songs.size} found   ${found.count { !it.tube }} yours", style = pixel(12.sp, Ink.mid))
                      Spacer(Modifier.height(16.dp))
                      Word("play it", pixel(14.sp), touch = 8.dp) { Playback.play(found, 0) }
@@ -1153,7 +1248,7 @@ index dc12dfd..9deb96c 100644
                      said?.let { Spacer(Modifier.height(10.dp)); BasicText(it, style = pixel(12.sp, Ink.mid)) }
                      Spacer(Modifier.height(14.dp))
                  }
-@@ -2200,6 +2236,7 @@ private fun ImportPage(pages: Pages) {
+@@ -2200,6 +2242,7 @@ private fun ImportPage(pages: Pages) {
          }
          // your spotify playlists: one picked
          if (c == null && reading == null && lists == null) theirs?.let { all ->
@@ -1161,7 +1256,7 @@ index dc12dfd..9deb96c 100644
              items(all, key = { it.id }) { l ->
                  Column(Modifier.fillMaxWidth().clickable(remember { MutableInteractionSource() }, indication = null, onClick = felt { open(l) }).padding(vertical = 9.dp)) {
                      BasicText(l.name.uppercase(), style = headline(22.sp), maxLines = 2, overflow = TextOverflow.Ellipsis)
-@@ -2296,7 +2333,7 @@ fun Dithered(photo: Song, modifier: Modifier, px: Int = 1080, print: Print = Pri
+@@ -2296,7 +2339,7 @@ fun Dithered(photo: Song, modifier: Modifier, px: Int = 1080, print: Print = Pri
      if (print == Print.CLEAR) return AsItIs(photo, modifier, px)
      val cover = rememberCover(photo, px)
      val density = LocalDensity.current
@@ -1170,7 +1265,7 @@ index dc12dfd..9deb96c 100644
          val side = with(density) { maxWidth.toPx() }
          val frames by androidx.compose.runtime.produceState<List<androidx.compose.ui.graphics.ImageBitmap>?>(null, cover, print) {
              val c = cover ?: return@produceState
-@@ -2344,11 +2381,11 @@ private fun Xrayed(photo: Song, modifier: Modifier, px: Int = 1080) {
+@@ -2344,11 +2387,11 @@ private fun Xrayed(photo: Song, modifier: Modifier, px: Int = 1080) {
      LaunchedEffect(pic) {
          if (pic != null) { if (Moves.less.value) shown.snapTo(1f) else shown.animateTo(1f, tween(600, easing = Motion.expo)) }
      }
@@ -1184,7 +1279,7 @@ index dc12dfd..9deb96c 100644
          }
      }
  }
-@@ -2375,7 +2412,7 @@ fun ArtistPhoto(photo: Song, modifier: Modifier) {
+@@ -2375,7 +2418,7 @@ fun ArtistPhoto(photo: Song, modifier: Modifier) {
  @Composable
  private fun AsItIs(photo: Song, modifier: Modifier, px: Int = 1080) {
      val cover = rememberCover(photo, px)
@@ -1193,7 +1288,7 @@ index dc12dfd..9deb96c 100644
          cover?.let { Image(it.image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
      }
  }
-@@ -2419,19 +2456,47 @@ private object Searches {
+@@ -2419,19 +2462,47 @@ private object Searches {
  
  /**
   * YouTube Music's answer to what's typed, and to its words alone where it has symbols (YouTube can answer a title's
@@ -1251,7 +1346,7 @@ index dc12dfd..9deb96c 100644
  }
  
  /** youtube.com's videos for what's typed and its words alone, together, best answers first. */
-@@ -2494,10 +2559,22 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2494,10 +2565,22 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
          seen[0] = forced
          value = online to forced
      }
@@ -1276,7 +1371,7 @@ index dc12dfd..9deb96c 100644
      }
      // radio's stations by that name (ink radio's own first)
      val stations by androidx.compose.runtime.produceState(emptyList<Song>(), ask) {
-@@ -2506,7 +2583,11 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2506,7 +2589,11 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
      // youtube.com's own videos (the full build): songs never put on YouTube Music, apart from its songs; none it already gave
      val videosAll by androidx.compose.runtime.produceState(emptyList<Song>(), ask) {
          val text = ask?.first
@@ -1289,7 +1384,7 @@ index dc12dfd..9deb96c 100644
      }
      // a YouTube video's id in what's typed ("[VDvX1hzGZN4]", as a file downloaded from YouTube is often named): that video
      val tubeId = if (pasted || !YouTubeMusic.available) null else Search.tubeId(raw)
-@@ -2517,6 +2598,26 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2517,6 +2604,26 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
      // a stream's own link pasted (not a service's): a station
      val streamed = remember(raw) { if (!pasted && RadioBrowser.isStream(raw)) Stations.of(RadioBrowser.pasted(raw)) else null }
      LaunchedEffect(Unit) { KeptStations.load(ctx) }
@@ -1316,7 +1411,7 @@ index dc12dfd..9deb96c 100644
      val videos = remember(videosAll, tube, byId) {
          val have = (tube.songs.flatMap { listOf(it.id, Radio.key(it.title, it.artist)) } + listOfNotNull(byId?.id)).toSet()
          videosAll.filter { it.id !in have && Radio.key(it.title, it.artist) !in have }.take(12)
-@@ -2625,16 +2726,17 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2625,16 +2732,17 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
                  Box(row) { SongRow(s, pages = pages) { Playback.play(foundSongs, i) } }
              }
          }
@@ -1333,17 +1428,17 @@ index dc12dfd..9deb96c 100644
 +        if (tube.songs.isNotEmpty()) item { Label("songs on youtube music") }
 +        itemsIndexed(tube.songs.take(8), key = { _, s -> "t" + s.id }) { i, s ->
 +            Box(row) { SongRow(s, pages = pages) { Playback.play(tube.songs, i) } }
-+        }
+         }
+-        // what YouTube Music has: its artists, records, songs, then playlists
 +        if (onSpotify.isNotEmpty()) item { Label(spotifySaid ?: "on spotify") }
 +        itemsIndexed(onSpotify, key = { _, s -> "s" + s.id }) { _, s ->
 +            Box(row) { SongRow(s, pages = pages) { playSpotify(s) } }
-         }
--        // what YouTube Music has: its artists, records, songs, then playlists
++        }
 +        // what YouTube Music has: its artists and records
          if (tubeArtists.isNotEmpty()) item {
              Label("artists on youtube music")
              LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-@@ -2656,9 +2758,18 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2656,9 +2764,18 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
              }
              Spacer(Modifier.height(10.dp))
          }
@@ -1365,7 +1460,7 @@ index dc12dfd..9deb96c 100644
          }
          if (tube.lists.isNotEmpty()) item {
              Label("playlists on youtube music")
-@@ -3896,7 +4007,7 @@ private fun TvRail(tabs: List<String>, tab: String, onPlace: (String) -> Unit, p
+@@ -3896,7 +4013,7 @@ private fun TvRail(tabs: List<String>, tab: String, onPlace: (String) -> Unit, p
      }
      // a little smaller, and scrolled if it must be, so settings stays above the mini player (it went under it)
      Column(Modifier.width(TV_RAIL).fillMaxHeight().padding(bottom = foot).verticalScroll(rememberScrollState()).padding(start = 28.dp, top = 24.dp, bottom = 12.dp)) {
@@ -1415,6 +1510,46 @@ index da0fc19..e2df889 100644
              }
          }
          // the song's spotify canvas in its place, moving, in the same look (signed in to spotify: settings, the look)
+diff --git a/app/src/main/java/app/ink/music/PlayerService.kt b/app/src/main/java/app/ink/music/PlayerService.kt
+index 5a1856e..a67c9bd 100644
+--- a/app/src/main/java/app/ink/music/PlayerService.kt
++++ b/app/src/main/java/app/ink/music/PlayerService.kt
+@@ -580,7 +580,9 @@ class PlayerService : MediaLibraryService() {
+         Stations.curated(this)   // ink radio's stations, known by id (the car, the queue kept)
+         // a YouTube Music song plays from "ytm://<id>": its stream found as it starts (the full build only);
+         // a Navidrome song's stream as the quality asks for the network it starts on (Quality)
+-        val sources = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(
++        // what YouTube Music streams, kept as it plays (the editions', 2026-11-21: every play and every seek back came down again):
++        // played again it starts at once, seeks at once, costs no data, and plays without a signal (StreamCache)
++        val sources = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(StreamCache.factory(this,
+             androidx.media3.datasource.ResolvingDataSource.Factory(androidx.media3.datasource.DefaultDataSource.Factory(this)) { spec ->
+                 // chosen once a song: a seek opens it again partway, and must get the same stream
+                 fun quality(): Int {
+@@ -609,7 +611,7 @@ class PlayerService : MediaLibraryService() {
+                     else -> spec
+                 }
+             },
+-        )
++        ))
+         // 24 bit kept 24 bit (2026-11-01): the decoders give
+         // float, the song's whole depth, and float goes to Android (Media3's default made every song 16 bit). Media3
+         // can't change speed on float itself, so an episode's speed is Android's audio track's (1x for music: untouched)
+diff --git a/app/src/main/java/app/ink/music/QueuePage.kt b/app/src/main/java/app/ink/music/QueuePage.kt
+index 9da9781..ea62400 100644
+--- a/app/src/main/java/app/ink/music/QueuePage.kt
++++ b/app/src/main/java/app/ink/music/QueuePage.kt
+@@ -219,7 +219,10 @@ fun RemoteQueuePage(r: Everywhere.Remote, onClose: () -> Unit) {
+                         i < r.index -> Ink.dim
+                         else -> Ink.mid
+                     }
+-                    Row(Modifier.fillMaxWidth().height(ROW), verticalAlignment = Alignment.CenterVertically) {
++                    // a song tapped plays there (the editions', 2026-11-21)
++                    Row(Modifier.fillMaxWidth().height(ROW).then(if (r.steerable && i != r.index) Modifier.clickable(remember { MutableInteractionSource() }, indication = null) {
++                        Everywhere.steer(r, "jump", r.places.getOrElse(i) { i - r.index }.toLong())
++                    } else Modifier), verticalAlignment = Alignment.CenterVertically) {
+                         Column(Modifier.weight(1f)) {
+                             // the song playing there filling with its cover's color, as this phone's own queue does
+                             if (i == r.index && r.length > 0 && !q.station) FilledTitle(q.title.uppercase(), tone, q, r.length, r.playing, r) { r.positionNow() }
 diff --git a/app/src/main/java/app/ink/music/Settings.kt b/app/src/main/java/app/ink/music/Settings.kt
 index 88425c2..287a35d 100644
 --- a/app/src/main/java/app/ink/music/Settings.kt
@@ -1470,6 +1605,166 @@ index 01a113d..c41f010 100644
          val n = cells(px.toFloat(), px / 360f)
          canvas.drawBitmap(Bitmap.createScaledBitmap(rings(id, n, (top - pad * .4f) / px), px, px, false), 0f, 0f, null)
          canvas.save(); canvas.translate(pad, top); words.draw(canvas); canvas.restore()
+diff --git a/app/src/main/java/app/ink/music/StreamCache.kt b/app/src/main/java/app/ink/music/StreamCache.kt
+new file mode 100644
+index 0000000..7027373
+--- /dev/null
++++ b/app/src/main/java/app/ink/music/StreamCache.kt
+@@ -0,0 +1,63 @@
++package app.ink.music
++
++import android.content.Context
++import android.net.Uri
++import androidx.media3.common.C
++import androidx.media3.datasource.DataSource
++import androidx.media3.datasource.DataSpec
++import androidx.media3.datasource.TransferListener
++import androidx.media3.datasource.cache.CacheDataSource
++import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
++import androidx.media3.datasource.cache.SimpleCache
++
++/**
++ * The songs YouTube Music streams, kept on the phone as they play (the editions', 2026-11-21: "the android app doesn't have good
++ * cache memory": every play, and every seek back, came down from YouTube again). Kept by the song ("ytm://<id>", never
++ * the stream's address, which changes every few hours), the oldest let go first, up to a tenth of the phone's free
++ * room (256 MB at the least, 1 GB at the most). Played again, a song starts and seeks at once, costs no data, and plays
++ * with no signal. In the app's cache folder: Android's "clear cache" empties it. Songs kept for offline aren't here
++ * (they're Offline's); nor the server's, the radio or episodes (they pass by).
++ */
++object StreamCache {
++    @Volatile private var cache: SimpleCache? = null
++
++    @Synchronized private fun cache(c: Context): SimpleCache? = cache ?: runCatching {
++        val dir = java.io.File(c.cacheDir, "streams")
++        val free = runCatching { c.cacheDir.usableSpace }.getOrDefault(0L)
++        val most = (free / 10).coerceIn(256L shl 20, 1L shl 30)
++        SimpleCache(dir, LeastRecentlyUsedCacheEvictor(most), androidx.media3.database.StandaloneDatabaseProvider(c)).also {
++            android.util.Log.i("ink-cache", "songs kept up to ${most shr 20} MB, ${it.cacheSpace shr 20} MB kept now")
++        }
++    }.onFailure { android.util.Log.w("ink-cache", "no keeping: $it") }.getOrNull()?.also { cache = it }
++
++    /** [upstream] (the player's own: the stream found as it starts), with YouTube Music's songs kept as they come. */
++    fun factory(c: Context, upstream: DataSource.Factory): DataSource.Factory {
++        val kept = cache(c) ?: return upstream
++        val cached = CacheDataSource.Factory().setCache(kept).setUpstreamDataSourceFactory(upstream)
++            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
++            .setEventListener(object : CacheDataSource.EventListener {
++                override fun onCachedBytesRead(cacheSizeBytes: Long, cachedBytesRead: Long) {
++                    android.util.Log.d("ink-cache", "played from the phone: ${cachedBytesRead shr 10} kB")
++                }
++                override fun onCacheIgnored(reason: Int) { android.util.Log.d("ink-cache", "passed by: $reason") }
++            })
++        return DataSource.Factory { Picking(cached.createDataSource(), upstream.createDataSource()) }
++    }
++
++    /** Kept or not, a song at a time: YouTube Music's through the keeping, everything else straight. */
++    private class Picking(private val kept: DataSource, private val straight: DataSource) : DataSource {
++        private var now: DataSource? = null
++        override fun addTransferListener(transferListener: TransferListener) {
++            kept.addTransferListener(transferListener); straight.addTransferListener(transferListener)
++        }
++        override fun open(dataSpec: DataSpec): Long {
++            val d = if (dataSpec.uri.scheme == "ytm") kept else straight
++            now = d
++            return d.open(dataSpec)
++        }
++        override fun read(buffer: ByteArray, offset: Int, length: Int): Int = now?.read(buffer, offset, length) ?: C.RESULT_END_OF_INPUT
++        override fun getUri(): Uri? = now?.uri
++        override fun getResponseHeaders(): Map<String, List<String>> = now?.responseHeaders ?: emptyMap()
++        override fun close() { try { now?.close() } finally { now = null } }
++    }
++}
+diff --git a/app/src/main/java/app/ink/music/SyncPhone.kt b/app/src/main/java/app/ink/music/SyncPhone.kt
+index e9f26c9..475b5be 100644
+--- a/app/src/main/java/app/ink/music/SyncPhone.kt
++++ b/app/src/main/java/app/ink/music/SyncPhone.kt
+@@ -365,6 +365,8 @@ object SyncPhone {
+  * carries on with it, and pauses here (the speaker, if it's casting). When play's pressed is kept (sync-resumed).
+  */
+ class Live(private val c: Context, private val player: () -> androidx.media3.common.Player?, private val device: () -> String) {
++    /** How long after a pause the computers can still steer it (the editions', 2026-11-21: a quarter hour, and the bar went deaf). */
++    private val KEEP_WAITING = 60 * 60_000L
+     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+     private val main = android.os.Handler(android.os.Looper.getMainLooper())
+     private var telling: Job? = null
+@@ -417,26 +419,60 @@ class Live(private val c: Context, private val player: () -> androidx.media3.com
+         }
+     }
+ 
+-    /** Waiting on each computer to carry on with it or steer it, again and again while it plays (and a quarter hour after). */
++    /**
++     * Waiting on each computer to carry on with it or steer it, again and again while it plays (and an hour after a
++     * pause). Each computer waited on by itself (the editions', 2026-11-21: one after the other, a computer that was off held the
++     * rest up 13 s at a time, and every unanswered wait slept 10 s, so a press there took that long or was missed).
++     */
+     private suspend fun waitAll() {
+-        while (true) {
+-            if (!wasPlaying && System.currentTimeMillis() - pausedAt > 15 * 60_000L) return
++        handedOff = false
++        kotlinx.coroutines.coroutineScope {
++            val on = HashMap<String, Job>()
++            while (!handedOff && (wasPlaying || System.currentTimeMillis() - pausedAt < KEEP_WAITING)) {
++                val list = peers()
++                if (list.isEmpty()) break
++                for (p in list) if (on[p.id]?.isActive != true) on[p.id] = launch { waitOn(p) }
++                delay(5_000)
++            }
++            on.values.forEach { it.cancel() }
++        }
++    }
++
++    /** Carried on with elsewhere: the waiting ends till play's pressed here again. */
++    @Volatile private var handedOff = false
++
++    private suspend fun waitOn(p: Sync.Peer) {
++        while (!handedOff && (wasPlaying || System.currentTimeMillis() - pausedAt < KEEP_WAITING)) {
+             val since = runCatching { resumed.readText().trim().toLong() }.getOrDefault(0L)
+-            val list = peers()
+-            if (list.isEmpty()) return
+-            for (p in list) {
+-                val r = runCatching { post(p.at, "/wait", Sync.sealed(kept, p, JSONObject().put("since", since)), 30_000) }.getOrNull()
+-                if (r == null) { delay(10_000); continue }
+-                val m = runCatching { Sync.replied(p, r) }.getOrNull() ?: continue
+-                // steered from the computer's bottom bar: done here (the speaker, if it's casting)
+-                m.optString("do").takeIf { it.isNotEmpty() }?.let { what ->
+-                    main.post {
+-                        player()?.run {
+-                            when (what) { "play" -> play(); "pause" -> pause(); "next" -> seekToNextMediaItem(); "previous" -> seekToPrevious(); "seek" -> seekTo(m.optLong("ms")) }
+-                        }
+-                    }
++            val r = runCatching { post(p.at, "/wait", Sync.sealed(kept, p, JSONObject().put("since", since)), 30_000) }.getOrNull()
++            if (r == null) { delay(3_000); continue }
++            val m = runCatching { Sync.replied(p, r) }.getOrNull() ?: continue
++            // steered from the computer: done here (the speaker, if it's casting)
++            m.optString("do").takeIf { it.isNotEmpty() }?.let { what -> steered(what, m.optLong("ms")) }
++            if (stopIfHanded(m.optLong("handed"))) { handedOff = true; return }
++        }
++    }
++
++    /** A press from the computer: play, pause, next, back, a place in the song, a song in the queue, the volume. */
++    private fun steered(what: String, ms: Long) {
++        main.post {
++            val pl = player() ?: return@post
++            when (what) {
++                "play" -> pl.play()
++                "pause" -> pl.pause()
++                "next" -> pl.seekToNextMediaItem()
++                "previous" -> pl.seekToPrevious()
++                "seek" -> pl.seekTo(ms)
++                // a song in its queue, so many on (or back) from the one playing
++                "jump" -> (pl.currentMediaItemIndex + ms.toInt()).takeIf { it in 0 until pl.mediaItemCount }?.let { pl.seekTo(it, 0L); pl.play() }
++                // the phone's own volume, a step at a time (ms: up or down, in hundredths of the whole)
++                "volume" -> runCatching {
++                    val am = c.getSystemService(android.media.AudioManager::class.java)
++                    val most = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
++                    val step = maxOf(1, Math.round(most * kotlin.math.abs(ms) / 100.0).toInt())
++                    val now = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
++                    am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, (now + if (ms < 0) -step else step).coerceIn(0, most), 0)
+                 }
+-                if (stopIfHanded(m.optLong("handed"))) return
+             }
+         }
+     }
 diff --git a/app/src/main/java/app/ink/music/Theme.kt b/app/src/main/java/app/ink/music/Theme.kt
 index 963ca1a..fbd38c7 100644
 --- a/app/src/main/java/app/ink/music/Theme.kt
@@ -6258,7 +6553,7 @@ index ef9e10d..3a5af3b 100644
  
      /** Written whole or not at all. */
 diff --git a/desktop/src/main/kotlin/app/ink/music/Main.kt b/desktop/src/main/kotlin/app/ink/music/Main.kt
-index b682226..05f5df8 100644
+index b682226..0cfcd3d 100644
 --- a/desktop/src/main/kotlin/app/ink/music/Main.kt
 +++ b/desktop/src/main/kotlin/app/ink/music/Main.kt
 @@ -186,7 +186,7 @@ fun main() {
@@ -6288,6 +6583,54 @@ index b682226..05f5df8 100644
                  // Windows: the strip along the top the window's to drag (InkTitle), over the pages
                  TitleStrip(Size.of(chosen))
                  // the Mac: a double-click along the top zooms, as a title bar's does (MacTitleStrip)
+@@ -578,18 +580,27 @@ private fun App() {
+             // the bar along the foot where there's no room for the now column: rising a third of itself and in, sinking
+             // away out, as the phone's mini player (2026-11-10; it was there or not)
+             val remote = remoteNow()
++            val also = phoneAlso()
+             val pickingNow = Picking.picked.collectAsState().value.isNotEmpty()
++            val ownBar = frame != Frame.WIDE || tucked || finding || remote != null
+             AnimatedVisibility(
+-                (frame != Frame.WIDE || tucked || finding || remote != null) && pages.lastOrNull() != Page.Playing && !pickingNow,
++                (ownBar || also != null) && pages.lastOrNull() != Page.Playing && !pickingNow,
+                 enter = slideInVertically(tween(Motion.ENTER, easing = Motion.expo)) { it / 3 } + fadeIn(tween(Motion.ENTER, easing = Motion.expo)),
+                 exit = slideOutVertically(tween(Motion.EXIT, easing = Motion.expo)) { it / 3 } + fadeOut(tween(Motion.EXIT, easing = Motion.expo)),
+             ) {
+-                MiniPlayer(
+-                    if (frame == Frame.WIDE && !finding) ({ Tuck.set(false) }) else null,
+-                    { if (pages.lastOrNull() != Page.Queue) pages += Page.Queue },
+-                    { if (pages.lastOrNull() != Page.PlayOn) pages += Page.PlayOn },
+-                    { name -> pages += Page.Artist(name) },
+-                ) { if (pages.lastOrNull() != Page.Playing) { PlayerSide.right = false; pages += Page.Playing } }
++                Column {
++                    // the phone playing as this plays too (the editions', 2026-11-21): its row over the bar, steered from here
++                    if (also != null && remote == null) PhoneAlso(also) {
++                        SyncHub.showPhone.value = true
++                        if (pages.lastOrNull() != Page.Playing) { PlayerSide.right = false; pages += Page.Playing }
++                    }
++                    if (ownBar) MiniPlayer(
++                        if (frame == Frame.WIDE && !finding) ({ Tuck.set(false) }) else null,
++                        { if (pages.lastOrNull() != Page.Queue) pages += Page.Queue },
++                        { if (pages.lastOrNull() != Page.PlayOn) pages += Page.PlayOn },
++                        { name -> pages += Page.Artist(name) },
++                    ) { SyncHub.showPhone.value = false; if (pages.lastOrNull() != Page.Playing) { PlayerSide.right = false; pages += Page.Playing } }
++                }
+             }
+             // songs picked: what to do with them all, along the foot (in the bar's place where it was)
+             AnimatedVisibility(
+@@ -616,8 +627,10 @@ private fun App() {
+                 else slideOutVertically(tween(Motion.EXIT, easing = Motion.expo)) { it / 16 }) + fadeOut(tween(Motion.EXIT, easing = Motion.expo)),
+         ) {
+             // nothing playing here and the phone is: its playing, the whole window (steered from here, to take over)
+-            val remote = remoteNow()
+-            if (remote != null) RemotePlayerPage(remote, { pages += it }) { Win.full(false); pages.remove(Page.Playing) }
++            val showPhone by SyncHub.showPhone.collectAsState()
++            val phone = phoneAlso()
++            val remote = remoteNow() ?: phone?.takeIf { showPhone }
++            if (remote != null) RemotePlayerPage(remote, { pages += it }) { Win.full(false); SyncHub.showPhone.value = false; pages.remove(Page.Playing) }
+             else PlayerPage({ pages += it }) { Win.full(false); pages.remove(Page.Playing) }
+         }
+         DropHint()
 diff --git a/desktop/src/main/kotlin/app/ink/music/Pieces.kt b/desktop/src/main/kotlin/app/ink/music/Pieces.kt
 index 7e799bc..7ad7d5d 100644
 --- a/desktop/src/main/kotlin/app/ink/music/Pieces.kt
@@ -6307,7 +6650,7 @@ index 7e799bc..7ad7d5d 100644
      )
  }
 diff --git a/desktop/src/main/kotlin/app/ink/music/PlayerPage.kt b/desktop/src/main/kotlin/app/ink/music/PlayerPage.kt
-index b4aaef3..b5b00fa 100644
+index b4aaef3..1360387 100644
 --- a/desktop/src/main/kotlin/app/ink/music/PlayerPage.kt
 +++ b/desktop/src/main/kotlin/app/ink/music/PlayerPage.kt
 @@ -113,7 +113,7 @@ object Win {
@@ -6319,6 +6662,30 @@ index b4aaef3..b5b00fa 100644
                      ?: java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration.bounds
                  s.placement = WindowPlacement.Floating
                  s.position = WindowPosition(b.x.dp, b.y.dp)
+@@ -826,9 +826,7 @@ fun RemotePlayerPage(o: Continue.Offer, open: (Page) -> Unit, onClose: () -> Uni
+                             Spacer(Modifier.weight(1f))
+                             if (length > 0 && !o.song.station) BasicText("-" + clock((length - pos).coerceAtLeast(0L)), style = pixel(12.sp, Ink.mid))
+                         }
+-                        Box(Modifier.width(side).height(1.dp).background(Ink.line)) {
+-                            if (length > 0 && !o.song.station) Box(Modifier.fillMaxWidth((pos.toFloat() / length).coerceIn(0f, 1f)).height(1.dp).background(accent))
+-                        }
++                        SteerLine(o, pos, accent, Modifier.width(side))
+                         Box(Modifier.size(side + off)) {
+                             if (!o.song.station && CoverPrint.on.collectAsState().value != Print.CLEAR) Dithered(o.song, Modifier.offset(off, off).size(side), px = 1200)
+                             CoverOf(o.song, o.song.album.ifEmpty { o.song.title }, Modifier.size(side), px = 1200, moving = o.playing)
+@@ -851,9 +849,12 @@ fun RemotePlayerPage(o: Continue.Offer, open: (Page) -> Unit, onClose: () -> Uni
+                                 SyncHub.steer(o.peer, if (o.playing) "pause" else "play")
+                             }
+                             Pixel(NEXT, "next, there", Ink.mid, cell = 3.dp) { SyncHub.steer(o.peer, "next") }
++                            Word("quieter", pixel(13.sp, Ink.mid), touch = 8.dp) { SyncHub.steer(o.peer, "volume", -8) }
++                            Word("louder", pixel(13.sp, Ink.mid), touch = 8.dp) { SyncHub.steer(o.peer, "volume", 8) }
+                             Spacer(Modifier.width(12.dp))
+                             Word("CONTINUE HERE", headline(26.sp), touch = 10.dp) { Continue.take(o) }
+                         }
++                        Unheard(o)
+                         Spacer(Modifier.height(18.dp))
+                         Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.line))
+                         Spacer(Modifier.height(14.dp))
 diff --git a/desktop/src/main/kotlin/app/ink/music/Settings.kt b/desktop/src/main/kotlin/app/ink/music/Settings.kt
 index bb93c85..05782b3 100644
 --- a/desktop/src/main/kotlin/app/ink/music/Settings.kt
@@ -6440,6 +6807,154 @@ index 77ad7a7..057fc22 100644
              }
          }
          // ARGB ints as Skia's BGRA bytes (little-endian: the same memory)
+diff --git a/desktop/src/main/kotlin/app/ink/music/SyncHub.kt b/desktop/src/main/kotlin/app/ink/music/SyncHub.kt
+index dcbb814..b338225 100644
+--- a/desktop/src/main/kotlin/app/ink/music/SyncHub.kt
++++ b/desktop/src/main/kotlin/app/ink/music/SyncHub.kt
+@@ -1,6 +1,8 @@
+ package app.ink.music
+ 
+ import androidx.compose.foundation.clickable
++import androidx.compose.foundation.gestures.detectTapGestures
++import androidx.compose.ui.input.pointer.pointerInput
+ import androidx.compose.foundation.interaction.MutableInteractionSource
+ import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.Column
+@@ -105,14 +107,23 @@ object SyncHub {
+ 
+     /** Woken when this computer carries on with a phone's playing, or steers it, so its player's waiting call answers at once. */
+     val handing = Object()
+-    /** A press made here for a phone's player ("play", "pause", "next", "previous"), handed over on its waiting call. */
+-    private val asked = java.util.concurrent.ConcurrentHashMap<String, String>()
++    /**
++     * A press made here for a phone's player ("play", "pause", "next", "previous", "seek", "jump", "volume", and how
++     * far), handed over on its waiting call.
++     */
++    private val asked = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
++    /** When each phone last waited here for a press (the editions', 2026-11-21: a press made while it wasn't waiting went nowhere, unsaid). */
++    private val waitedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
++    /** Whether a phone's waiting on this computer now (a press made here reaches it at once). */
++    fun listening(peer: String): Boolean = System.currentTimeMillis() - (waitedAt[peer] ?: 0L) < 40_000
++    /** The phone's playing opened whole here while this computer plays too ([PhoneAlso]'s "open"). */
++    val showPhone = MutableStateFlow(false)
+ 
+     /** The phone's playing, steered from here (the bottom bar): told it on its waiting call, at once; a TV directly. */
+-    fun steer(peer: String, what: String) {
++    fun steer(peer: String, what: String, ms: Long = 0L) {
+         val p = kept.peers().firstOrNull { it.id == peer }
+-        if (p != null && p.hub) { scope.launch { post(p.at, "/do", Sync.sealed(kept, p, JSONObject().put("do", what))) }; return }
+-        asked[peer] = what
++        if (p != null && p.hub) { scope.launch { post(p.at, "/do", Sync.sealed(kept, p, JSONObject().put("do", what).put("ms", ms))) }; return }
++        asked[peer] = what to ms
+         synchronized(handing) { handing.notifyAll() }
+     }
+ 
+@@ -237,10 +248,13 @@ object SyncHub {
+                 Sync.unsealed(kept, body)?.let { (peer, m) ->
+                     val since = m.optLong("since")
+                     val until = System.currentTimeMillis() + 25_000
++                    waitedAt[peer.id] = System.currentTimeMillis()
+                     synchronized(handing) {
+                         while (kept.handedAt(peer.id) <= since && asked[peer.id] == null && System.currentTimeMillis() < until) handing.wait(maxOf(1L, until - System.currentTimeMillis()))
+                     }
+-                    200 to Sync.reply(peer, JSONObject().put("handed", kept.handedAt(peer.id)).put("do", asked.remove(peer.id) ?: ""))
++                    waitedAt[peer.id] = System.currentTimeMillis()
++                    val a = asked.remove(peer.id)
++                    200 to Sync.reply(peer, JSONObject().put("handed", kept.handedAt(peer.id)).put("do", a?.first ?: "").put("ms", a?.second ?: 0L))
+                 } ?: (403 to "{}")
+             }.getOrElse { 400 to "{}" }
+             // a phone waiting for the next change anywhere: answered the moment one comes (or in 25 s, unchanged)
+@@ -260,6 +274,9 @@ object SyncHub {
+                         "next" -> Player.next()
+                         "previous" -> Player.previous()
+                         "seek" -> Player.seek(m.optLong("ms"))
++                        // a song in the queue, so many on (or back) from the one playing; the volume, a step
++                        "jump" -> Player.now.value?.let { Player.jump(it.index + m.optLong("ms").toInt()) }
++                        "volume" -> Player.volume(Player.volume.value + m.optLong("ms").toInt())
+                     }
+                     publish()
+                     200 to Sync.reply(peer, JSONObject().put("ok", true))
+@@ -492,10 +509,8 @@ fun RemoteBar(o: Continue.Offer, onArtist: (String) -> Unit, onOpen: () -> Unit
+     val pos by produceState(o.positionNow(), o) { while (true) { value = o.positionNow(); kotlinx.coroutines.delay(500) } }
+     val length = o.length
+     Column(Modifier.fillMaxWidth().background(Ink.black).padding(start = SIDE, end = SIDE, bottom = 14.dp)) {
+-        // the line, in the cover's colour, filling as it plays there
+-        Box(Modifier.fillMaxWidth().padding(bottom = 8.dp).height(1.dp).background(Ink.line)) {
+-            if (length > 0 && !o.song.station) Box(Modifier.fillMaxWidth((pos.toFloat() / length).coerceIn(0f, 1f)).height(1.dp).background(cover?.accent ?: Ink.ink))
+-        }
++        // the line, in the cover's colour, filling as it plays there; a click on it the place to go to there
++        SteerLine(o, pos, cover?.accent ?: Ink.ink, Modifier.fillMaxWidth())
+         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+             Opens(Modifier.size(72.dp), onOpen) { CoverOf(o.song, o.song.album.ifEmpty { o.song.title }, Modifier.fillMaxSize()) }
+             Spacer(Modifier.width(16.dp))
+@@ -513,10 +528,67 @@ fun RemoteBar(o: Continue.Offer, onArtist: (String) -> Unit, onOpen: () -> Unit
+                     SyncHub.steer(o.peer, if (o.playing) "pause" else "play")
+                 }
+                 Pixel(NEXT, "next, there", Ink.mid, cell = 3.dp) { SyncHub.steer(o.peer, "next") }
++                Word("quieter", pixel(12.sp, Ink.mid), touch = 6.dp) { SyncHub.steer(o.peer, "volume", -8) }
++                Word("louder", pixel(12.sp, Ink.mid), touch = 6.dp) { SyncHub.steer(o.peer, "volume", 8) }
+             }
+             Spacer(Modifier.width(24.dp))
+             BasicText(if (o.song.station) "live" else "${clock(pos)} / ${clock(length)}", style = pixel(12.sp, Ink.mid), modifier = Modifier.widthIn(min = 96.dp))
+             Word("CONTINUE HERE", headline(16.sp), Modifier.padding(start = 12.dp), touch = 10.dp) { Continue.take(o) }
+         }
++        Unheard(o)
++    }
++}
++
++/**
++ * Said under a phone's playing when it isn't waiting here for presses (the editions', 2026-11-21: a press then went nowhere, and
++ * the bar looked as if it could only be watched): what brings it back.
++ */
++@Composable
++fun Unheard(o: Continue.Offer) {
++    val listening by produceState(SyncHub.listening(o.peer), o.peer) { while (true) { value = SyncHub.listening(o.peer); kotlinx.coroutines.delay(2_000) } }
++    if (!listening) BasicText("${o.from} isn't taking presses from here just now. press play or pause there once, and it will",
++        style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(top = 6.dp))
++}
++
++/** A playing elsewhere's line, a click on it steering it there to that point: the line itself 1 dp, its reach taller. */
++@Composable
++fun SteerLine(o: Continue.Offer, pos: Long, color: androidx.compose.ui.graphics.Color, modifier: Modifier) {
++    val length = o.length
++    Box(modifier.height(17.dp).then(if (length > 0 && !o.song.station) Modifier.pointerInput(o.peer, length) {
++        detectTapGestures { at -> SyncHub.steer(o.peer, "seek", (at.x / size.width * length).toLong().coerceIn(0L, length)) }
++    } else Modifier), contentAlignment = Alignment.CenterStart) {
++        Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.line)) {
++            if (length > 0 && !o.song.station) Box(Modifier.fillMaxWidth((pos.toFloat() / length).coerceIn(0f, 1f)).height(1.dp).background(color))
++        }
++    }
++}
++
++/** The phone playing while this computer plays too (the editions', 2026-11-21: it showed only when nothing played here), or null. */
++@Composable
++fun phoneAlso(): Continue.Offer? {
++    val offer by SyncHub.theirs.collectAsState()
++    val now by Player.now.collectAsState()
++    val o = offer ?: return null
++    if (now?.playing != true || o.peer.isEmpty() || !o.playing || !o.live) return null
++    return o
++}
++
++/** A slim row over the bar along the foot: what the phone plays as this computer plays too, steered from here. */
++@Composable
++fun PhoneAlso(o: Continue.Offer, onOpen: () -> Unit) {
++    val pos by produceState(o.positionNow(), o) { while (true) { value = o.positionNow(); kotlinx.coroutines.delay(500) } }
++    Column(Modifier.fillMaxWidth().background(Ink.black).padding(start = SIDE, end = SIDE, top = 6.dp, bottom = 6.dp)) {
++        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
++            BasicText("also playing on ${o.from}", style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(end = 14.dp))
++            Box(Modifier.weight(1f)) { Word(o.song.title.uppercase() + "  " + o.song.artist.lowercase(), headline(15.sp), onClick = onOpen) }
++            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
++                Pixel(BACK, "back, there", Ink.mid, cell = 2.dp) { SyncHub.steer(o.peer, "previous") }
++                Pixel(PAUSE, "pause, there", Ink.ink, cell = 2.dp) { SyncHub.steer(o.peer, "pause") }
++                Pixel(NEXT, "next, there", Ink.mid, cell = 2.dp) { SyncHub.steer(o.peer, "next") }
++                Word("open", pixel(12.sp, Ink.mid), touch = 6.dp, onClick = onOpen)
++            }
++        }
++        SteerLine(o, pos, Ink.mid, Modifier.fillMaxWidth())
++        Unheard(o)
+     }
+ }
 diff --git a/desktop/src/main/kotlin/app/ink/music/Theme.kt b/desktop/src/main/kotlin/app/ink/music/Theme.kt
 index ba304e0..11e4a23 100644
 --- a/desktop/src/main/kotlin/app/ink/music/Theme.kt

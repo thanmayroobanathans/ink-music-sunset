@@ -580,18 +580,27 @@ private fun App() {
             // the bar along the foot where there's no room for the now column: rising a third of itself and in, sinking
             // away out, as the phone's mini player (2026-11-10; it was there or not)
             val remote = remoteNow()
+            val also = phoneAlso()
             val pickingNow = Picking.picked.collectAsState().value.isNotEmpty()
+            val ownBar = frame != Frame.WIDE || tucked || finding || remote != null
             AnimatedVisibility(
-                (frame != Frame.WIDE || tucked || finding || remote != null) && pages.lastOrNull() != Page.Playing && !pickingNow,
+                (ownBar || also != null) && pages.lastOrNull() != Page.Playing && !pickingNow,
                 enter = slideInVertically(tween(Motion.ENTER, easing = Motion.expo)) { it / 3 } + fadeIn(tween(Motion.ENTER, easing = Motion.expo)),
                 exit = slideOutVertically(tween(Motion.EXIT, easing = Motion.expo)) { it / 3 } + fadeOut(tween(Motion.EXIT, easing = Motion.expo)),
             ) {
-                MiniPlayer(
-                    if (frame == Frame.WIDE && !finding) ({ Tuck.set(false) }) else null,
-                    { if (pages.lastOrNull() != Page.Queue) pages += Page.Queue },
-                    { if (pages.lastOrNull() != Page.PlayOn) pages += Page.PlayOn },
-                    { name -> pages += Page.Artist(name) },
-                ) { if (pages.lastOrNull() != Page.Playing) { PlayerSide.right = false; pages += Page.Playing } }
+                Column {
+                    // the phone playing as this plays too (the editions', 2026-11-21): its row over the bar, steered from here
+                    if (also != null && remote == null) PhoneAlso(also) {
+                        SyncHub.showPhone.value = true
+                        if (pages.lastOrNull() != Page.Playing) { PlayerSide.right = false; pages += Page.Playing }
+                    }
+                    if (ownBar) MiniPlayer(
+                        if (frame == Frame.WIDE && !finding) ({ Tuck.set(false) }) else null,
+                        { if (pages.lastOrNull() != Page.Queue) pages += Page.Queue },
+                        { if (pages.lastOrNull() != Page.PlayOn) pages += Page.PlayOn },
+                        { name -> pages += Page.Artist(name) },
+                    ) { SyncHub.showPhone.value = false; if (pages.lastOrNull() != Page.Playing) { PlayerSide.right = false; pages += Page.Playing } }
+                }
             }
             // songs picked: what to do with them all, along the foot (in the bar's place where it was)
             AnimatedVisibility(
@@ -618,8 +627,10 @@ private fun App() {
                 else slideOutVertically(tween(Motion.EXIT, easing = Motion.expo)) { it / 16 }) + fadeOut(tween(Motion.EXIT, easing = Motion.expo)),
         ) {
             // nothing playing here and the phone is: its playing, the whole window (steered from here, to take over)
-            val remote = remoteNow()
-            if (remote != null) RemotePlayerPage(remote, { pages += it }) { Win.full(false); pages.remove(Page.Playing) }
+            val showPhone by SyncHub.showPhone.collectAsState()
+            val phone = phoneAlso()
+            val remote = remoteNow() ?: phone?.takeIf { showPhone }
+            if (remote != null) RemotePlayerPage(remote, { pages += it }) { Win.full(false); SyncHub.showPhone.value = false; pages.remove(Page.Playing) }
             else PlayerPage({ pages += it }) { Win.full(false); pages.remove(Page.Playing) }
         }
         DropHint()
