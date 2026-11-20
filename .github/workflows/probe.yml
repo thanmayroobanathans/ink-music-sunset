@@ -1,0 +1,34 @@
+# What Spotify's web player asks of Spotify as it opens (signed out), on a phone and a computer: hosts, service
+# worker, passes carried. For the editions' Spotify sign-in, which waits on the web player's first signed-in ask.
+name: Probe Spotify's web player
+
+on:
+  push:
+    paths: [".github/probe/**", ".github/workflows/probe.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Playwright
+        run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+      - name: Open the web player
+        run: |
+          mkdir -p out
+          python .github/probe/spotify.py
+      - name: Pictures, to a draft release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls out
+          gh release create "probe-${{ github.run_number }}" out/*.png --draft --title "Probe: spotify, run ${{ github.run_number }}" \
+            --notes "Spotify's web player as it opens, signed out" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" || true

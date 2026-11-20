@@ -29,10 +29,170 @@ index 674ba9d..82f0226 100644
  
      // the key only where it's kept (Fedora); Windows' keystore.properties holds Last.fm's alone, its builds signed as debug ones
 diff --git a/app/src/full/java/app/ink/music/SpotifySignIn.kt b/app/src/full/java/app/ink/music/SpotifySignIn.kt
-index c0ceeab..1a4eba0 100644
+index c0ceeab..ab23b9d 100644
 --- a/app/src/full/java/app/ink/music/SpotifySignIn.kt
 +++ b/app/src/full/java/app/ink/music/SpotifySignIn.kt
-@@ -230,6 +230,23 @@ object Spotify {
+@@ -44,6 +44,7 @@ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.flow.MutableStateFlow
+ import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.first
+ import kotlinx.coroutines.sync.Mutex
+ import kotlinx.coroutines.sync.withLock
+ import kotlinx.coroutines.withContext
+@@ -80,6 +81,89 @@ object Spotify {
+     internal fun named(w: WebView) {
+         w.settings.userAgentString = w.settings.userAgentString.replace("; wv)", ")").replace(Regex("Version/\\S+ "), "")
+         agent = w.settings.userAgentString
++        w.addJavascriptInterface(PageSaw(), "inkSpotify")
++        watchWorkers()
++    }
++
++    /**
++     * The passes, caught three ways (the editions', 2026-11-20: signed in, "reading your spotify" waited for good, a
++     * listener's phone): as the WebView sends an ask ([caught]); as the web player's service worker sends one, which
++     * the WebView's own client never sees ([watchWorkers]); and as the page's script hands one to fetch or
++     * XMLHttpRequest ([HOOK]), whatever the WebView shows of its headers.
++     */
++    @Volatile internal var onPage = ""
++
++    /** The page's script saw these go to Spotify (inkSpotify.take): taken from Spotify's own pages only. */
++    internal fun fromPage(b: String, c: String?) {
++        if (!onPage.endsWith(".spotify.com") || onPage == "accounts.spotify.com" || !signedIn()) return
++        val pass = b.trim()
++        if (pass.isEmpty()) return
++        val token = c?.trim()?.takeIf { it.isNotEmpty() }
++        if (ready()) { if (pass == bearer && client == null && token != null) client = token; return }
++        android.util.Log.i("ink-spotify", "passes, from the page's script")
++        take(pass, token)
++    }
++
++    private class PageSaw {
++        @android.webkit.JavascriptInterface
++        fun take(b: String?, c: String?) { if (b != null) Spotify.fromPage(b, c) }
++    }
++
++    @Volatile private var watching = false
++
++    /** The service worker's asks pass its own client, not the page's: watched too, for the passes they carry. */
++    private fun watchWorkers() {
++        if (watching) return
++        watching = true
++        runCatching {
++            android.webkit.ServiceWorkerController.getInstance().setServiceWorkerClient(object : android.webkit.ServiceWorkerClient() {
++                override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
++                    if (caught(request)) android.util.Log.i("ink-spotify", "passes, from the service worker")
++                    return null
++                }
++            })
++        }.onFailure { android.util.Log.w("ink-spotify", "service worker: $it") }
++    }
++
++    /** The page's fetch and XMLHttpRequest, wrapped: a Bearer pass sent to a Spotify host is handed to [fromPage]. */
++    private const val HOOK = """(function () {
++  if (window.inkHooked) return; window.inkHooked = true;
++  function grab(u, a, c) {
++    try { if (a && /^Bearer /i.test(a) && /spotify[.]com/.test(String(u))) inkSpotify.take(a.substring(7), c || ''); } catch (e) {}
++  }
++  function read(h, k) {
++    if (!h) return null;
++    try { if (typeof h.get === 'function') return h.get(k); } catch (e) {}
++    if (Array.isArray(h)) { for (var i = 0; i < h.length; i++) if (String(h[i][0]).toLowerCase() === k) return h[i][1]; return null; }
++    for (var n in h) if (n.toLowerCase() === k) return h[n];
++    return null;
++  }
++  var f = window.fetch;
++  if (f) window.fetch = function (input, init) {
++    try {
++      var u = typeof input === 'string' ? input : (input && input.url) || String(input);
++      var h = (init && init.headers) || (input && input.headers);
++      grab(u, read(h, 'authorization'), read(h, 'client-token'));
++    } catch (e) {}
++    return f.apply(this, arguments);
++  };
++  var open = XMLHttpRequest.prototype.open, set = XMLHttpRequest.prototype.setRequestHeader;
++  XMLHttpRequest.prototype.open = function (m, u) { this.inkUrl = u; return open.apply(this, arguments); };
++  XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
++    try {
++      var n = String(k).toLowerCase();
++      if (n === 'authorization') this.inkAuth = v;
++      if (n === 'client-token') this.inkClient = v;
++      if (this.inkAuth) grab(this.inkUrl, this.inkAuth, this.inkClient);
++    } catch (e) {}
++    return set.apply(this, arguments);
++  };
++})();"""
++
++    /** A page starting: where it is (for [fromPage]), and its fetch wrapped before the player asks of Spotify. */
++    internal fun started(w: WebView, url: String) {
++        onPage = runCatching { android.net.Uri.parse(url).host.orEmpty() }.getOrDefault("")
++        if (onPage.endsWith(".spotify.com")) w.evaluateJavascript(HOOK, null)
+     }
+     const val SIGN_IN = "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
+ 
+@@ -152,14 +236,29 @@ object Spotify {
+     /** One of the web player's asks of Spotify: the first signed-in one carries both passes, taken. True if taken. */
+     internal fun caught(request: WebResourceRequest): Boolean {
+         val host = request.url.host.orEmpty()
+-        if (host != "api-partner.spotify.com" && !host.endsWith("spclient.spotify.com")) return false
++        // api-partner and spclient were the ones; any of Spotify's hosts now (its sign-in's own aside), as they move
++        if (!host.endsWith(".spotify.com") || host == "accounts.spotify.com" || host == "www.spotify.com") return false
+         val h = request.requestHeaders.mapKeys { it.key.lowercase() }
+         val auth = h["authorization"]?.takeIf { it.startsWith("Bearer ") }?.removePrefix("Bearer ")?.takeIf { it.isNotBlank() } ?: return false
+-        if (!signedIn() || ready()) return false
++        if (!signedIn()) return false
++        if (ready()) { if (auth == bearer && client == null) h["client-token"]?.let { client = it }; return false }
+         take(auth, h["client-token"])
+         return true
+     }
+ 
++    /** Lets Spotify's pages use the phone's DRM (Widevine), as Chrome does: its web player wants it to start. */
++    internal fun protectedMedia(log: Boolean = false) = object : android.webkit.WebChromeClient() {
++        override fun onPermissionRequest(request: android.webkit.PermissionRequest) {
++            val drm = android.webkit.PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID
++            if (request.origin.host.orEmpty().endsWith(".spotify.com") && drm in request.resources) request.grant(arrayOf(drm)) else request.deny()
++        }
++
++        override fun onConsoleMessage(m: android.webkit.ConsoleMessage): Boolean {
++            if (log) android.util.Log.i("ink-spotify", "page says: ${m.message().take(200)}")
++            return true
++        }
++    }
++
+     private val gate = Mutex()
+ 
+     /**
+@@ -170,7 +269,7 @@ object Spotify {
+     suspend fun fresh(c: Context): Boolean = gate.withLock {
+         if (ready()) return@withLock true
+         if (!signedIn()) return@withLock false
+-        val got = CompletableDeferred<Unit>()
++        val before = _at.value
+         val web = withContext(Dispatchers.Main) {
+             WebView(c.applicationContext).apply {
+                 // a page out of sight still wants a size (Spotify's lays itself out off the height)
+@@ -179,15 +278,18 @@ object Spotify {
+                 settings.domStorageEnabled = true
+                 named(this)
+                 webViewClient = object : WebViewClient() {
++                    override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) { started(view, url) }
++                    override fun onPageCommitVisible(view: WebView, url: String) { started(view, url) }
+                     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+-                        if (caught(request)) got.complete(Unit)
++                        caught(request)
+                         return null
+                     }
+                 }
++                webChromeClient = protectedMedia()
+                 loadUrl("https://open.spotify.com/")
+             }
+         }
+-        withTimeoutOrNull(25_000) { got.await() }
++        withTimeoutOrNull(30_000) { at.first { it != before && ready() } }
+         withContext(Dispatchers.Main) { runCatching { web.stopLoading(); web.destroy() } }
+         android.util.Log.i("ink-spotify", "fresh passes: ${ready()}")
+         ready()
+@@ -230,6 +332,23 @@ object Spotify {
          return url
      }
  
@@ -56,6 +216,72 @@ index c0ceeab..1a4eba0 100644
      /** Your playlists, Liked Songs first; null when Spotify wouldn't say (signed out, or its queries changed). */
      suspend fun playlists(): List<Import.Theirs>? = withContext(Dispatchers.IO) {
          runCatching {
+@@ -307,8 +426,16 @@ class SpotifySignIn : ComponentActivity() {
+             var said by remember { mutableStateOf<String?>(null) }
+             LaunchedEffect(reading) {
+                 if (!reading) return@LaunchedEffect
+-                delay(25_000)
+-                said = "spotify didn't answer. close, and try again"
++                delay(20_000)
++                // the page shown, whatever's holding the player (a banner, a choice of app or browser): any tap that
++                // has it ask Spotify of anything brings the passes
++                said = "still waiting on spotify. if its page asks anything, answer it, or tap your library"
++            }
++            // the passes, by whichever way they came: done
++            LaunchedEffect(Unit) {
++                val before = Spotify.at.value
++                Spotify.at.first { it != before && Spotify.ready() }
++                finish()
+             }
+             BackHandler { web?.takeIf { it.canGoBack() && !reading }?.goBack() ?: finish() }
+             Column(Modifier.fillMaxSize().background(Ink.black).windowInsetsPadding(WindowInsets.safeDrawing).imePadding()) {
+@@ -316,6 +443,7 @@ class SpotifySignIn : ComponentActivity() {
+                     BasicText("spotify", style = pixel(12.sp, Ink.mid), modifier = Modifier.weight(1f))
+                     Word("close", pixel(12.sp, Ink.mid), touch = 10.dp) { finish() }
+                 }
++                said?.let { BasicText(it, style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)) }
+                 Box(Modifier.fillMaxWidth().weight(1f)) {
+                     AndroidView(
+                         // never in a layer of its own (an alpha one drew it blank): hidden by the black panel over it
+@@ -340,31 +468,27 @@ class SpotifySignIn : ComponentActivity() {
+                                     }
+ 
+                                     override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
++                                        Spotify.started(view, url)
+                                         reading = url.startsWith("https://open.spotify.com") && Spotify.signedIn()
+                                     }
+ 
++                                    override fun onPageCommitVisible(view: WebView, url: String) { Spotify.started(view, url) }
++
+                                     // the web player's own asks of Spotify: the first signed-in one carries both passes
+                                     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                                         if (Spotify.caught(request)) runOnUiThread { finish() }
+                                         return null
+                                     }
+                                 }
+-                                // the page's own words, in the log (what it says when it won't draw)
+-                                webChromeClient = object : android.webkit.WebChromeClient() {
+-                                    override fun onConsoleMessage(m: android.webkit.ConsoleMessage): Boolean {
+-                                        android.util.Log.i("ink-spotify", "page says: ${m.message().take(200)}")
+-                                        return true
+-                                    }
+-                                }
++                                // the page's own words, in the log (what it says when it won't draw); its DRM let
++                                webChromeClient = Spotify.protectedMedia(log = true)
+                                 web = this
+                                 loadUrl(Spotify.SIGN_IN)
+                             }
+                         },
+                     )
+-                    if (reading) Column(Modifier.fillMaxSize().background(Ink.black).padding(20.dp)) {
+-                        BasicText(if (said == null) "READING YOUR SPOTIFY" else "NOT SIGNED IN", style = headline(40.sp, if (said == null) Ink.mid else Ink.ink))
+-                        Spacer(Modifier.height(8.dp))
+-                        said?.let { BasicText(it, style = pixel(12.sp, Ink.mid)) }
++                    if (reading && said == null) Column(Modifier.fillMaxSize().background(Ink.black).padding(20.dp)) {
++                        BasicText("READING YOUR SPOTIFY", style = headline(40.sp, Ink.mid))
+                     }
+                 }
+             }
 diff --git a/app/src/full/java/app/ink/music/SpotifySync.kt b/app/src/full/java/app/ink/music/SpotifySync.kt
 new file mode 100644
 index 0000000..6c298e4
