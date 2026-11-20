@@ -106,6 +106,8 @@ media_id() {  # a file's id in the downloads (else all files) the media store ke
 }
 exportify_test() {
   adb root > /dev/null 2>&1; sleep 4; adb wait-for-device
+  # the shell's leave to read a download can't be handed on here: the app given all files instead, for the test only
+  adb shell appops set "$PKG" MANAGE_EXTERNAL_STORAGE allow
   printf '%s\n' '"Track URI","Track Name","Artist URI(s)","Artist Name(s)","Album Name"' \
     '"spotify:track:0VjIjW4GlUZAMYd2vXMi3b","Blinding Lights","spotify:artist:1Xyo4u8uXC1ZmMpatF05PJ","The Weeknd","After Hours"' \
     '"spotify:track:463CkQjx2Zk1yXoBuierM9","Levitating (feat. DaBaby)","spotify:artist:6M2wZ9GZgrQXHCFfjv46we,spotify:artist:4r63FhuTkUYltbVAg5TQnk","Dua Lipa,DaBaby","Future Nostalgia"' \
@@ -123,11 +125,12 @@ exportify_test() {
   echo "who opens a zip:"; adb shell cmd package query-activities --brief -a android.intent.action.VIEW -t application/zip -d "content://media/external/$zip" | grep -i "$PKG" || echo "  not $PKG"
   adb logcat -c
   adb shell am start -a android.intent.action.VIEW -t text/csv --grant-read-uri-permission -d "content://media/external/$csv" -n "$PKG/app.ink.music.Main"
-  shot 03d-exportify-csv 20
+  sleep 20; clear_pops; shot 03d-exportify-csv 2
   adb shell am start -a android.intent.action.VIEW -t application/zip --grant-read-uri-permission -d "content://media/external/$zip" -n "$PKG/app.ink.music.Main"
-  shot 03e-exportify-zip 6
+  sleep 6; clear_pops; shot 03e-exportify-zip 2
   clear_pops; tap "road trip" && shot 03f-exportify-zip-picked 15
   adb logcat -d -s ink-import:* ink-youtube:I | tail -40 > "$OUT/exportify-log.txt"
+  adb shell appops set "$PKG" MANAGE_EXTERNAL_STORAGE default
   adb shell input keyevent KEYCODE_BACK; sleep 2; adb shell input keyevent KEYCODE_BACK; sleep 2
 }
 exportify_test || echo "exportify test stopped"
