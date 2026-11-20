@@ -120,4 +120,31 @@ tap "$SETTINGS_WORD" && shot 13-settings 5
 tap sound && shot 14-sound 4
 tap "open it" && shot 15-equalizer 5
 swipe_up && shot 16-equalizer-more 3
+
+# spotify's sign-in: settings' FROM SPOTIFY, SIGN IN, then its page; "continue with google" tapped, and an email typed
+# (example.com: no one's) to see the page that comes next. What each page was, in the app's own log.
+spotify_test() {
+  local i
+  for i in 1 2 3 4; do adb shell input keyevent KEYCODE_BACK; sleep 2; find_text "from spotify" > /dev/null && break
+    find_text "$SETTINGS_WORD" > /dev/null && { tap "$SETTINGS_WORD"; sleep 4; }; done
+  for i in 1 2 3 4 5; do find_text "from spotify" > /dev/null && break; swipe_up; sleep 2; done
+  adb logcat -c
+  tap "from spotify" || return 1
+  shot 17-spotify-import 4
+  tap "sign in" || return 1
+  shot 18-spotify-page 15
+  ui; cp ui.xml "$OUT/spotify-ui.txt"
+  if tap "continue with google" "sign up with google" "log in with google"; then
+    shot 19-spotify-google 12
+    ui; cp ui.xml "$OUT/spotify-google-ui.txt"
+    adb shell input keyevent KEYCODE_BACK; sleep 6
+  fi
+  shot 20-spotify-back 2
+  if tap "email or username" "email address" "email"; then
+    sleep 1; adb shell input text "someone@example.com"; sleep 1
+    tap "continue" "log in" "next" && shot 21-spotify-after-email 12
+  fi
+  adb logcat -d -s ink-spotify:* chromium:* cr_*:* | tail -120 > "$OUT/spotify-log.txt"
+}
+spotify_test || echo "spotify test stopped"
 ls -l "$OUT"
