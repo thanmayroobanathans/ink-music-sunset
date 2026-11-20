@@ -159,4 +159,28 @@ spotify_player_test() {
   adb shell input keyevent KEYCODE_BACK
 }
 spotify_player_test || echo "spotify player test stopped"
+
+# Exportify's files opened with the app: one playlist's CSV, then "export all"'s zip of two. Opened as a browser's
+# downloads would open them (VIEW, a content address, text/csv), Main named (no chooser on the emulator). As root.
+exportify_test() {
+  local dl="content://com.android.externalstorage.documents/document/primary%3ADownload%2F"
+  printf '%s\n' '"Track URI","Track Name","Artist URI(s)","Artist Name(s)","Album Name"' \
+    '"spotify:track:0VjIjW4GlUZAMYd2vXMi3b","Blinding Lights","spotify:artist:1Xyo4u8uXC1ZmMpatF05PJ","The Weeknd","After Hours"' \
+    '"spotify:track:463CkQjx2Zk1yXoBuierM9","Levitating (feat. DaBaby)","spotify:artist:6M2wZ9GZgrQXHCFfjv46we,spotify:artist:4r63FhuTkUYltbVAg5TQnk","Dua Lipa,DaBaby","Future Nostalgia"' \
+    '"spotify:track:7qiZfU4dY1lWllzX7mPBI3","Shape of You","spotify:artist:6eUKZXaKkcviH0Ku9w2n3V","Ed Sheeran","÷ (Deluxe)"' > night_drive_mix.csv
+  cp night_drive_mix.csv road_trip.csv
+  python3 -c "import zipfile; z = zipfile.ZipFile('spotify_playlists.zip', 'w'); [z.write(f) for f in ('night_drive_mix.csv', 'road_trip.csv')]; z.close()"
+  adb push night_drive_mix.csv /sdcard/Download/night_drive_mix.csv > /dev/null
+  adb push spotify_playlists.zip /sdcard/Download/spotify_playlists.zip > /dev/null
+  echo "who opens a csv:"; adb shell cmd package query-activities --brief -a android.intent.action.VIEW -t text/csv -d "${dl}x.csv" | grep -i "$PKG" || echo "  not $PKG"
+  echo "who opens a zip:"; adb shell cmd package query-activities --brief -a android.intent.action.VIEW -t application/zip -d "${dl}x.zip" | grep -i "$PKG" || echo "  not $PKG"
+  adb logcat -c
+  adb shell am start -a android.intent.action.VIEW -t text/csv --grant-read-uri-permission -d "${dl}night_drive_mix.csv" -n "$PKG/app.ink.music.Main"
+  shot 23-exportify-csv 15
+  adb shell am start -a android.intent.action.VIEW -t application/zip --grant-read-uri-permission -d "${dl}spotify_playlists.zip" -n "$PKG/app.ink.music.Main"
+  shot 24-exportify-zip 6
+  tap "road trip" && shot 25-exportify-zip-picked 12
+  adb logcat -d -s ink-import:* ink-youtube:I ActivityManager:W | tail -40 > "$OUT/exportify-log.txt"
+}
+exportify_test || echo "exportify test stopped"
 ls -l "$OUT"

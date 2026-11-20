@@ -40,6 +40,32 @@ object SpotifySync {
         save(c, load(c).filterNot { it.spotify == spotify } + Kept(spotify, name, tube.id, songs.map { Radio.key(it.title, it.artist) }.toSet()))
     }
 
+    /** A file's playlist (Exportify's), kept under its name as a Spotify one is under its id. */
+    fun fileKey(name: String) = "file:" + name.trim().lowercase()
+
+    /** How many of [songs] the YouTube Music playlist kept under [key] hasn't had yet; null: none kept under it. */
+    fun pending(c: Context, key: String, songs: List<Import.Said>): Int? {
+        val k = load(c).firstOrNull { it.spotify == key } ?: return null
+        return songs.count { Radio.key(it.title, it.artist) !in k.known }
+    }
+
+    /**
+     * The playlist brought in again: its songs the YouTube Music one kept under [key] hasn't had, added there as
+     * found ([found], in the same order; one not found is passed over, and not asked for again). How many added.
+     */
+    suspend fun addNew(c: Context, key: String, songs: List<Import.Said>, found: List<Song?>): Int {
+        val all = load(c)
+        val k = all.firstOrNull { it.spotify == key } ?: return 0
+        val list = TubeList(k.tube, k.name, "", null)
+        var added = 0
+        songs.forEachIndexed { i, s ->
+            if (Radio.key(s.title, s.artist) !in k.known) found.getOrNull(i)?.let { if (YouTubeAccount.addTo(list, it)) added++ }
+        }
+        save(c, all.map { if (it.spotify == key) it.copy(known = it.known + songs.map { s -> Radio.key(s.title, s.artist) }) else it })
+        android.util.Log.i("ink-spotify", "brought in again, ${k.name}: $added added on youtube music")
+        return added
+    }
+
     /** Each kept playlist read again from Spotify, and what's new there found and added on YouTube Music. */
     suspend fun run(c: Context, force: Boolean = false) {
         if (running) return
@@ -51,6 +77,7 @@ object SpotifySync {
         try {
             if (!Spotify.fresh(c)) return
             val out = all.map { k ->
+                if (k.spotify.startsWith("file:")) return@map k   // a file's: brought in again by hand
                 val now = Spotify.songs(k.spotify) ?: return@map k
                 val new = now.filter { Radio.key(it.title, it.artist) !in k.known }
                 if (new.isEmpty()) return@map k

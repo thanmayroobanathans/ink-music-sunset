@@ -159,9 +159,15 @@ class Main : ComponentActivity() {
         Moves.start(this)
         // a computer's QR code read by the camera: kept before anything, so even a Main closing itself below hands it on
         Computers.take(intent)
+        // a playlist file opened with the app (Exportify's download): copied in now, for the import page
+        val file = Import.take(this, intent)
         // opened again (the home screen, the notification) over ink music's own screens: those stay
-        // as they were (the YouTube sign-in, mid-way), not a second library over them
-        if (!isTaskRoot) { finish(); return }
+        // as they were (the YouTube sign-in, mid-way), not a second library over them. Opened from another app's
+        // screen with a file (a browser's downloads): ink music's own screens brought up, to take it there
+        if (!isTaskRoot) {
+            if (file) runCatching { startActivity(android.content.Intent(this, Main::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            finish(); return
+        }
         // a TV never stands upright: the manifest's portrait is the phone's
         Device.tv = isTv(this)
         if (isTv(this)) requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -217,6 +223,7 @@ class Main : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         Computers.take(intent)
+        Import.take(this, intent)
     }
 
     /** A TV's remote pressed with nothing focused (Compose then hears nothing): the first thing on screen takes focus. */
@@ -387,6 +394,9 @@ private fun App() {
     // a computer's QR code read by the phone's own camera: its pairing page, on top (it pairs from there)
     val scanned by Computers.scanned.collectAsState()
     LaunchedEffect(scanned) { if (scanned != null && pages.stack.lastOrNull() != Page.HandOver) pages.open(Page.HandOver) }
+    // a playlist file opened with the app (Exportify's download): the import page, on top, takes it
+    val opened by Import.incoming.collectAsState()
+    LaunchedEffect(opened) { if (opened != null && pages.stack.lastOrNull() != Page.Import) pages.open(Page.Import) }
     var playerUp by rememberSaveable { mutableStateOf(false) }
     // what plays on another device, opened from its bar ([RemotePlayerPage])
     var remoteUp by remember { mutableStateOf(false) }
@@ -2108,13 +2118,6 @@ private fun ImportPage(pages: Pages) {
     var progress by remember { mutableStateOf(0) }
     var matched by remember { mutableStateOf<List<Song?>?>(null) }
     var said by remember { mutableStateOf<String?>(null) }
-    val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) scope.launch {
-            val read = runCatching { Import.read(ctx, uri) }.getOrDefault(emptyList())
-            lists = read; chosen = read.singleOrNull(); matched = null
-            said = if (read.isEmpty()) "no playlist in that file: an exportify csv, or spotify's Playlist1.json" else null
-        }
-    }
     // signed in to Spotify: your playlists, read once the sign-in comes back; one tapped, its songs read in
     val spotifyAt by Spotify.at.collectAsState()
     var theirs by remember { mutableStateOf<List<Import.Theirs>?>(null) }
@@ -2122,6 +2125,22 @@ private fun ImportPage(pages: Pages) {
     var reading by remember { mutableStateOf<Int?>(null) }
     // the Spotify playlist it came from (none for a file): made on YouTube Music, it's kept in step ([SpotifySync])
     var fromSpotify by remember { mutableStateOf<String?>(null) }
+    // a file: Exportify's (a playlist, or "export all"'s zip of them), or Spotify's own download
+    fun load(uri: android.net.Uri, named: String? = null) {
+        scope.launch {
+            val read = runCatching { Import.read(ctx, uri, named) }.getOrDefault(emptyList())
+            lists = read; chosen = read.singleOrNull(); matched = null; fromSpotify = null
+            said = if (read.isEmpty()) "no playlist in that file: exportify's csv (or its zip), or spotify's Playlist1.json" else null
+        }
+    }
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) load(uri)
+    }
+    val opened by Import.incoming.collectAsState()
+    LaunchedEffect(opened) { opened?.let { Import.incoming.value = null; load(it.uri, it.name) } }
+    fun exportify() {
+        runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://exportify.app")).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
     LaunchedEffect(spotifyAt) {
         if (!Spotify.ready()) return@LaunchedEffect
         if (theirs == null) theirs = Spotify.playlists() ?: run { said = "spotify didn't say. sign in again"; null }
@@ -2157,39 +2176,21 @@ private fun ImportPage(pages: Pages) {
             BasicText((c?.name ?: "FROM SPOTIFY").uppercase(), style = headline(40.sp), maxLines = 3, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(10.dp))
             when {
-                c == null && Spotify.available -> {
-                    val list = theirs
-                    when {
-                        reading != null -> BasicText("reading ${wanted?.name?.lowercase().orEmpty()}: $reading songs", style = pixel(12.sp, Ink.mid))
-                        list == null -> {
-                            BasicText("sign in to spotify and pick a playlist (or your liked songs). each song is found here, yours first, " +
-                                "else on youtube music. your sign-in stays on this phone.", style = pixel(12.sp, Ink.ink.copy(alpha = .75f)).copy(lineHeight = 20.sp))
-                            Spacer(Modifier.height(14.dp))
-                            Word("SIGN IN", headline(40.sp), touch = 8.dp) { said = null; if (Spotify.ready()) scope.launch { theirs = Spotify.playlists() } else Spotify.signIn(ctx) }
-                        }
-                        else -> BasicText("${list.size - 1} playlists and your liked songs. pick one", style = pixel(12.sp, Ink.mid))
-                    }
-                    said?.let { Spacer(Modifier.height(12.dp)); BasicText(it, style = pixel(12.sp, Ink.mid)) }
-                    // or a file, as before: exportify's csv, spotify's own download
-                    if (list == null && reading == null) {
-                        Spacer(Modifier.height(30.dp))
-                        BasicText("or a file: an exportify.app csv, or spotify's own download of your data (Playlist1.json)", style = pixel(12.sp, Ink.mid))
-                        Spacer(Modifier.height(6.dp))
-                        Word("choose a file", pixel(14.sp, Ink.mid), touch = 8.dp) { pick.launch(arrayOf("text/*", "application/json", "application/octet-stream", "*/*")) }
-                    }
-                }
+                c == null && reading != null -> BasicText("reading ${wanted?.name?.lowercase().orEmpty()}: $reading songs", style = pixel(12.sp, Ink.mid))
                 c == null -> {
-                    BasicText("a playlist from spotify, as a file: on exportify.app sign in with spotify and export one (a csv), " +
-                        "or use spotify's own download of your data (Playlist1.json, every playlist). each song is found here, " +
-                        "yours first" + (if (YouTubeMusic.available) ", else on youtube music" else "") + ".", style = pixel(12.sp, Ink.ink.copy(alpha = .75f)).copy(lineHeight = 20.sp))
-                    Spacer(Modifier.height(14.dp))
-                    Row {
-                        Word("choose a file", pixel(14.sp), Modifier.padding(end = 26.dp), touch = 8.dp) { pick.launch(arrayOf("text/*", "application/json", "application/octet-stream", "*/*")) }
-                        Word("exportify.app", pixel(14.sp, Ink.mid), touch = 8.dp) {
-                            runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://exportify.app")).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                        }
-                    }
+                    // Exportify first (the editions', 2026-11-21: Spotify's own page turned the app's sign-in away, "unsupported
+                    // browser"; Exportify asks Spotify the proper way, in your browser, and gives a file)
+                    BasicText("on exportify, log in with spotify, then tap export beside a playlist (or export all, for every one). " +
+                        "back here, open the file, or open it from your downloads with this app. each song is found here, yours first" +
+                        (if (YouTubeMusic.available) ", else on youtube music" else "") + ".", style = pixel(12.sp, Ink.ink.copy(alpha = .75f)).copy(lineHeight = 20.sp))
+                    Spacer(Modifier.height(16.dp))
+                    Word("OPEN EXPORTIFY", headline(40.sp), touch = 8.dp) { said = null; exportify() }
+                    Spacer(Modifier.height(4.dp))
+                    Word("OPEN THE FILE", headline(40.sp), touch = 8.dp) { said = null; pick.launch(arrayOf("text/*", "application/zip", "application/json", "application/octet-stream", "*/*")) }
                     said?.let { Spacer(Modifier.height(12.dp)); BasicText(it, style = pixel(12.sp, Ink.mid)) }
+                    Spacer(Modifier.height(18.dp))
+                    BasicText("a playlist brought in again adds only its new songs to the one made on youtube music. " +
+                        "spotify's own download of your data (Playlist1.json) opens here too.", style = pixel(12.sp, Ink.mid).copy(lineHeight = 20.sp))
                 }
                 m == null -> {
                     // a line filling as they're found, as the player's fills with the song
@@ -2207,8 +2208,24 @@ private fun ImportPage(pages: Pages) {
                     Spacer(Modifier.height(16.dp))
                     Word("play it", pixel(14.sp), touch = 8.dp) { Playback.play(found, 0) }
                     val spotifyId = fromSpotify
-                    KeepIt(c.name, found, pages, onTube = spotifyId?.let { id -> { list: app.ink.music.TubeList -> SpotifySync.keep(ctx, id, c.name, list, c.songs) } })
-                    if (spotifyId != null && YouTubeAccount.who.collectAsState().value != null) {
+                    val key = spotifyId ?: SpotifySync.fileKey(c.name)
+                    val signedTube = YouTubeAccount.who.collectAsState().value != null
+                    // made on YouTube Music before (this playlist brought in again): only what's new, added there
+                    val waiting = remember(c, m) { SpotifySync.pending(ctx, key, c.songs) }
+                    var adding by remember(c, m) { mutableStateOf<String?>(null) }
+                    if (waiting != null && signedTube) {
+                        Spacer(Modifier.height(8.dp))
+                        if (waiting == 0) BasicText("on youtube music already, nothing new since", style = pixel(12.sp, Ink.mid))
+                        else Word(adding ?: "add its $waiting new songs to youtube music", pixel(14.sp, if (adding == null) Ink.ink else Ink.mid), touch = 8.dp) {
+                            if (adding == null) scope.launch {
+                                adding = "adding $waiting"
+                                val n = SpotifySync.addNew(ctx, key, c.songs, m)
+                                adding = "$n added to ${c.name.lowercase()} on youtube music"
+                            }
+                        }
+                    }
+                    KeepIt(c.name, found, pages, onTube = { list: app.ink.music.TubeList -> SpotifySync.keep(ctx, key, c.name, list, c.songs) })
+                    if (spotifyId != null && signedTube) {
                         Spacer(Modifier.height(8.dp))
                         BasicText("made on youtube music, it's kept in step with spotify: songs added there are added here too", style = pixel(12.sp, Ink.mid))
                     }
@@ -2219,6 +2236,7 @@ private fun ImportPage(pages: Pages) {
         }
         // your spotify playlists: one picked
         if (c == null && reading == null && lists == null) theirs?.let { all ->
+            item { BasicText("or straight from spotify, signed in here", style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(top = 18.dp, bottom = 6.dp)) }
             items(all, key = { it.id }) { l ->
                 Column(Modifier.fillMaxWidth().clickable(remember { MutableInteractionSource() }, indication = null, onClick = felt { open(l) }).padding(vertical = 9.dp)) {
                     BasicText(l.name.uppercase(), style = headline(22.sp), maxLines = 2, overflow = TextOverflow.Ellipsis)

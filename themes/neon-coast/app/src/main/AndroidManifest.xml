@@ -61,6 +61,28 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="inkmusic" android:host="pair" />
             </intent-filter>
+            <!-- a playlist file opened with the app or shared to it: Exportify's CSV (or its "export all" zip),
+                 Spotify's own download (the editions', 2026-11-21) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="text/csv" />
+                <data android:mimeType="text/comma-separated-values" />
+                <data android:mimeType="application/csv" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+            <!-- shared (a SEND has no address of its own, only the file in it) -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/csv" />
+                <data android:mimeType="text/comma-separated-values" />
+                <data android:mimeType="application/csv" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
         </activity>
 
         <!-- the player in its own process: the screens can be rebuilt (or crash) without a
