@@ -51,6 +51,13 @@ adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:
 adb shell content call --uri content://media --method scan_volume --arg external_primary > /dev/null 2>&1 || true
 sleep 5
 
+# a tablet: held sideways (rotation locked to landscape)
+if [ "${ROTATE:-}" = "1" ]; then
+  adb shell settings put system accelerometer_rotation 0
+  adb shell settings put system user_rotation 1
+  adb shell wm user-rotation lock 1 > /dev/null 2>&1 || true
+  sleep 3
+fi
 adb shell am start -n "$PKG/app.ink.music.Main"
 shot 01-welcome 10
 # the welcome, step by step, till the places are there

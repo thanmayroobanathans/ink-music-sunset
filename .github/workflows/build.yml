@@ -122,7 +122,7 @@ jobs:
 
   screens:
     # each built app on an emulator, photographed; never holds up a release
-    name: screens ${{ matrix.edition.id }}
+    name: screens ${{ matrix.edition.shots }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -131,10 +131,14 @@ jobs:
       fail-fast: false
       matrix:
         edition:
-          - { id: neon-coast, pkg: app.ink.music.sunset, home: cruise, settings: safehouse }
-          - { id: vigil, pkg: app.ink.music.vigil, home: the beat, settings: hideout }
+          - { id: neon-coast, shots: neon-coast, pkg: app.ink.music.sunset, home: cruise, settings: safehouse, api: 34, profile: "", rotate: "" }
+          - { id: vigil, shots: vigil, pkg: app.ink.music.vigil, home: the beat, settings: hideout, api: 34, profile: "", rotate: "" }
+          # a tablet held sideways, on Android 16 (which turns big screens whatever an app asks)
+          - { id: vigil, shots: vigil-tablet, pkg: app.ink.music.vigil, home: the beat, settings: hideout, api: 36, profile: pixel_tablet, rotate: "1" }
     env:
       EDITION: ${{ matrix.edition.id }}
+      SHOTS: ${{ matrix.edition.shots }}
+      ROTATE: ${{ matrix.edition.rotate }}
       PKG: ${{ matrix.edition.pkg }}
       HOME_WORD: ${{ matrix.edition.home }}
       SETTINGS_WORD: ${{ matrix.edition.settings }}
@@ -165,9 +169,10 @@ jobs:
       - name: Screens
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: ${{ matrix.edition.api }}
           arch: x86_64
           target: google_apis
+          profile: ${{ matrix.edition.profile }}
           disable-animations: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: bash .github/screens.sh
@@ -178,6 +183,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls shots/*.png > /dev/null 2>&1 || { echo "no screenshots"; exit 0; }
-          gh release create "screens-${EDITION}-build${GITHUB_RUN_NUMBER}" shots/*.png --draft \
+          gh release create "screens-${SHOTS}-build${GITHUB_RUN_NUMBER}" shots/*.png --draft \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "Screens: ${EDITION}, build ${GITHUB_RUN_NUMBER}" --notes "The built app on an Android 14 emulator."
+            --title "Screens: ${SHOTS}, build ${GITHUB_RUN_NUMBER}" --notes "The built app on an emulator."

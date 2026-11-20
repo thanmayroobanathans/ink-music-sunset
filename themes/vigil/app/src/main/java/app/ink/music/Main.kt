@@ -1005,9 +1005,16 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
     }
 }
 
-/** The phone turned sideways (only the records can be: [RecordFlow]); a TV, always wide, never is. */
+/**
+ * The phone turned sideways (only the records can be: [RecordFlow]); a TV, always wide, never is. Nor is a tablet
+ * (or a folding phone opened): from Android 16, a big screen turns as it's held whatever ink asks, so it's ink
+ * everywhere, wide, not the records' flow (sideways there, the mini player was hidden: a song playing looked like none).
+ */
 @Composable
-fun sideways() = !onTv() && androidx.compose.ui.platform.LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+fun sideways(): Boolean {
+    val c = androidx.compose.ui.platform.LocalConfiguration.current
+    return !onTv() && c.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE && c.smallestScreenWidthDp < 600
+}
 
 /**
  * The pager's fling, but none when it's still and on its page. A row of covers flung to its end hands the

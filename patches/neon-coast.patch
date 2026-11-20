@@ -178,7 +178,7 @@ index 6396aeb..8f2b530 100644
  /**
   * A song's heart, as on the desktop: 17% while not loved; loving it, red with a soft red glow for
 diff --git a/app/src/main/java/app/ink/music/Main.kt b/app/src/main/java/app/ink/music/Main.kt
-index dc12dfd..312eee0 100644
+index dc12dfd..93e3c69 100644
 --- a/app/src/main/java/app/ink/music/Main.kt
 +++ b/app/src/main/java/app/ink/music/Main.kt
 @@ -195,7 +195,8 @@ class Main : ComponentActivity() {
@@ -235,7 +235,26 @@ index dc12dfd..312eee0 100644
              Word("your year", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size + 1, menu), touch = 8.dp) { menu = false; pages.open(Page.Year) }
              Word("ink mapped", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size + 2, menu), touch = 8.dp) { menu = false; pages.open(Page.Mapped) }
              // pairing a computer a tap from anywhere, not deep in settings; once one's paired, its name opens its setting
-@@ -1671,7 +1674,7 @@ private fun ArtistPage(name: String, pages: Pages, tubeId: String = "") {
+@@ -1002,9 +1005,16 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+     }
+ }
+ 
+-/** The phone turned sideways (only the records can be: [RecordFlow]); a TV, always wide, never is. */
++/**
++ * The phone turned sideways (only the records can be: [RecordFlow]); a TV, always wide, never is. Nor is a tablet
++ * (or a folding phone opened): from Android 16, a big screen turns as it's held whatever ink asks, so it's ink
++ * everywhere, wide, not the records' flow (sideways there, the mini player was hidden: a song playing looked like none).
++ */
+ @Composable
+-fun sideways() = !onTv() && androidx.compose.ui.platform.LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
++fun sideways(): Boolean {
++    val c = androidx.compose.ui.platform.LocalConfiguration.current
++    return !onTv() && c.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE && c.smallestScreenWidthDp < 600
++}
+ 
+ /**
+  * The pager's fling, but none when it's still and on its page. A row of covers flung to its end hands the
+@@ -1671,7 +1681,7 @@ private fun ArtistPage(name: String, pages: Pages, tubeId: String = "") {
                      // as it is (or in the grain), a light photo held down so the name on it reads (nameDim)
                      if (!dithered && !xray && c != null) {
                          val dim = remember(c) { nameDim(c.image) }
@@ -244,7 +263,7 @@ index dc12dfd..312eee0 100644
                      }
                  }
                  else Box(Modifier.size(side).align(Alignment.Center))
-@@ -2296,7 +2299,7 @@ fun Dithered(photo: Song, modifier: Modifier, px: Int = 1080, print: Print = Pri
+@@ -2296,7 +2306,7 @@ fun Dithered(photo: Song, modifier: Modifier, px: Int = 1080, print: Print = Pri
      if (print == Print.CLEAR) return AsItIs(photo, modifier, px)
      val cover = rememberCover(photo, px)
      val density = LocalDensity.current
@@ -253,7 +272,7 @@ index dc12dfd..312eee0 100644
          val side = with(density) { maxWidth.toPx() }
          val frames by androidx.compose.runtime.produceState<List<androidx.compose.ui.graphics.ImageBitmap>?>(null, cover, print) {
              val c = cover ?: return@produceState
-@@ -2344,11 +2347,11 @@ private fun Xrayed(photo: Song, modifier: Modifier, px: Int = 1080) {
+@@ -2344,11 +2354,11 @@ private fun Xrayed(photo: Song, modifier: Modifier, px: Int = 1080) {
      LaunchedEffect(pic) {
          if (pic != null) { if (Moves.less.value) shown.snapTo(1f) else shown.animateTo(1f, tween(600, easing = Motion.expo)) }
      }
@@ -267,7 +286,7 @@ index dc12dfd..312eee0 100644
          }
      }
  }
-@@ -2375,7 +2378,7 @@ fun ArtistPhoto(photo: Song, modifier: Modifier) {
+@@ -2375,7 +2385,7 @@ fun ArtistPhoto(photo: Song, modifier: Modifier) {
  @Composable
  private fun AsItIs(photo: Song, modifier: Modifier, px: Int = 1080) {
      val cover = rememberCover(photo, px)
@@ -276,7 +295,7 @@ index dc12dfd..312eee0 100644
          cover?.let { Image(it.image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
      }
  }
-@@ -3896,7 +3899,7 @@ private fun TvRail(tabs: List<String>, tab: String, onPlace: (String) -> Unit, p
+@@ -3896,7 +3906,7 @@ private fun TvRail(tabs: List<String>, tab: String, onPlace: (String) -> Unit, p
      }
      // a little smaller, and scrolled if it must be, so settings stays above the mini player (it went under it)
      Column(Modifier.width(TV_RAIL).fillMaxHeight().padding(bottom = foot).verticalScroll(rememberScrollState()).padding(start = 28.dp, top = 24.dp, bottom = 12.dp)) {
