@@ -83,5 +83,20 @@ jobs:
           path: site
 
       - name: Publish
-        id: deploy
+        id: first
+        continue-on-error: true
         uses: actions/deploy-pages@v4
+
+      # GitHub sometimes can't see the site's upload for a few seconds ("Found 0 artifact(s)"): once more, a little later
+      - name: A moment
+        if: steps.first.outcome == 'failure'
+        run: sleep 45
+
+      - name: Publish (again)
+        id: again
+        if: steps.first.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+
+      - name: Where it is
+        id: deploy
+        run: echo "page_url=${{ steps.first.outputs.page_url || steps.again.outputs.page_url }}" >> "$GITHUB_OUTPUT"
