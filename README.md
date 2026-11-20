@@ -45,7 +45,7 @@ On your PC, signed in to GitHub:
 
 ## Install it on your phone
 
-1. On the phone, open `github.com/LionGravy645/ink-music-sunset`, tap **Releases**, then
+1. On the phone, open `github.com/thanmayroobanathans/ink-music-sunset`, tap **Releases**, then
    **ink-sunset-2.1.26.apk**.
 2. Open the download. If Android asks, allow your browser to **install unknown apps**, then tap **Install**.
 3. It shows up as **ink sunset** next to the official ink music, if you have that. They don't share a library,
