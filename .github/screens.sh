@@ -147,4 +147,16 @@ spotify_test() {
   adb logcat -d -s ink-spotify:* chromium:* cr_*:* | tail -120 > "$OUT/spotify-log.txt"
 }
 spotify_test || echo "spotify test stopped"
+
+# Spotify's own page (open.spotify.com) in the app's WebView, signed out: what it shows a phone's WebView, and which
+# of its asks the app sees (its log). The sign-in screen isn't exported: started as root (a google_apis emulator).
+spotify_player_test() {
+  adb root > /dev/null 2>&1; sleep 4; adb wait-for-device
+  adb logcat -c
+  adb shell am start -n "$PKG/app.ink.music.SpotifySignIn" --es start "https://open.spotify.com/" || return 1
+  shot 22-spotify-player 20
+  adb logcat -d -s ink-spotify:* | tail -80 > "$OUT/spotify-player-log.txt"
+  adb shell input keyevent KEYCODE_BACK
+}
+spotify_player_test || echo "spotify player test stopped"
 ls -l "$OUT"
