@@ -14,6 +14,8 @@ plugins {
 // the phone's version, one for both (app/build.gradle.kts' versionName): what the computer's updater compares, and the
 // packages' own (a Mac's must start above 0, Windows' msi upgrades by it)
 version = Regex("versionName = \"([^\"]+)\"").find(rootProject.file("app/build.gradle.kts").readText())!!.groupValues[1]
+    // an edition's phone version carries its name ("2.1.26-neoncoast"): the installers want the numbers alone
+    .substringBefore("-")
 
 kotlin { jvmToolchain(21) }
 

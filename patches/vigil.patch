@@ -4461,10 +4461,19 @@ index 634ccc0..1063637 100644
      private fun canvasOf(uri: String, pass: Pass): String? {
          repeat(2) { n ->
 diff --git a/desktop/build.gradle.kts b/desktop/build.gradle.kts
-index f5dafdf..323776d 100644
+index f5dafdf..b75079c 100644
 --- a/desktop/build.gradle.kts
 +++ b/desktop/build.gradle.kts
-@@ -95,10 +95,10 @@ compose.desktop {
+@@ -14,6 +14,8 @@ plugins {
+ // the phone's version, one for both (app/build.gradle.kts' versionName): what the computer's updater compares, and the
+ // packages' own (a Mac's must start above 0, Windows' msi upgrades by it)
+ version = Regex("versionName = \"([^\"]+)\"").find(rootProject.file("app/build.gradle.kts").readText())!!.groupValues[1]
++    // an edition's phone version carries its name ("2.1.26-neoncoast"): the installers want the numbers alone
++    .substringBefore("-")
+ 
+ kotlin { jvmToolchain(21) }
+ 
+@@ -95,10 +97,10 @@ compose.desktop {
          nativeDistributions {
              // each made on its own system (the Action's): the Mac's dmg, Windows' msi, Linux's deb and rpm
              targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
@@ -4478,7 +4487,7 @@ index f5dafdf..323776d 100644
              licenseFile.set(rootProject.file("LICENSE"))
              // libmpv and what it needs, put there by the build (native/<os>-<arch>/), read at run time
              // from compose.application.resources.dir
-@@ -110,8 +110,8 @@ compose.desktop {
+@@ -110,8 +112,8 @@ compose.desktop {
                  perUserInstall = true
                  menu = true
                  shortcut = true
@@ -4489,7 +4498,7 @@ index f5dafdf..323776d 100644
                  project.file("ink-music.ico").takeIf { it.exists() }?.let { iconFile.set(it) }
              }
              linux {
-@@ -177,7 +177,7 @@ val copyAngle by tasks.registering(Copy::class) {
+@@ -177,7 +179,7 @@ val copyAngle by tasks.registering(Copy::class) {
      enabled = windowsAngle
      val jars = configurations.named("runtimeClasspath").map { c -> c.filter { it.name.startsWith("skiko-awt-runtime-angle-windows-x64") } }
      from(jars.map { j -> j.map { zipTree(it) } }) { include("*.dll") }
@@ -4498,7 +4507,7 @@ index f5dafdf..323776d 100644
      mustRunAfter(tasks.matching { it.name == "createDistributable" })
  }
  tasks.matching { it.name == "createDistributable" }.configureEach { finalizedBy(copyAngle) }
-@@ -190,7 +190,7 @@ tasks.matching { it.name == "createDistributable" }.configureEach { finalizedBy(
+@@ -190,7 +192,7 @@ tasks.matching { it.name == "createDistributable" }.configureEach { finalizedBy(
  tasks.register<Exec>("packageInkMsi") {
      dependsOn("createDistributable", copyAngle)
      if (System.getProperty("os.name").startsWith("Windows")) dependsOn(":unzipWix")   // Compose keeps WiX on the root project
@@ -4507,7 +4516,7 @@ index f5dafdf..323776d 100644
      val out = layout.buildDirectory.dir("compose/binaries/main/msi").get().asFile
      val res = layout.buildDirectory.dir("msi-resources").get().asFile
      val art = project.file("windows")
-@@ -198,13 +198,13 @@ tasks.register<Exec>("packageInkMsi") {
+@@ -198,13 +200,13 @@ tasks.register<Exec>("packageInkMsi") {
      executable = File(compose.desktop.application.javaHome, "bin/jpackage").path
      args(
          "--type", "msi", "--app-image", app.path, "--dest", out.path,
