@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neon Coast: a music app for Android</title>
+<meta name="description" content="The soundtrack to your city, after dark. A free, open-source music app for Android: live radio, headphone correction, no ads, no account.">
+<meta name="theme-color" content="#0F0820">
+<link rel="icon" href="img/icon.svg" type="image/svg+xml">
+<link rel="icon" href="img/icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<!-- the card a shared link shows (WhatsApp, Instagram, Telegram) -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Neon Coast">
+<meta property="og:title" content="Neon Coast: the soundtrack to your city, after dark">
+<meta property="og:description" content="A free music app for Android. Live radio, headphone correction, no ads, no account.">
+<meta property="og:url" content="https://thanmayroobanathans.github.io/ink-music-sunset/">
+<meta property="og:image" content="https://thanmayroobanathans.github.io/ink-music-sunset/img/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="fonts/anton.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face { font-family: "Anton"; src: url("fonts/anton.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Chakra Petch"; src: url("fonts/chakra-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Chakra Petch"; src: url("fonts/chakra-600.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+
+:root {
+  --midnight: #0F0820;
+  --dusk: #221238;
+  --pink: #FF6FB5;
+  --teal: #4FF0E0;
+  --text: #F6E6F0;
+  --soft: #C9B3CF;
+  --sunset: linear-gradient(90deg, #FF3EA5, #FF7A59 55%, #FFC94D);
+  --sun: linear-gradient(180deg, #FFE066, #FF8A4D 45%, #FF3EA5);
+  --measure: 34rem;
+}
+* { box-sizing: border-box; }
+html { background: var(--midnight); color: var(--text); -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; font: 400 1.0625rem/1.6 "Chakra Petch", system-ui, sans-serif;
+  background: var(--midnight); overflow-x: hidden;
+}
+/* the app's tape scanlines, over the whole page */
+body::after {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50;
+  background: repeating-linear-gradient(180deg, transparent 0 3px, rgba(0, 0, 0, .14) 3px 4px);
+}
+a { color: var(--teal); text-underline-offset: .2em; }
+a:focus-visible, .get:focus-visible { outline: 3px solid var(--teal); outline-offset: 4px; border-radius: 4px; }
+img { display: block; max-width: 100%; height: auto; }
+
+.lit {
+  font-family: "Anton", Impact, sans-serif; font-weight: 400; text-transform: uppercase; letter-spacing: .015em; line-height: .95;
+  background: var(--sunset); -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 0 .28em rgba(255, 62, 165, .55));
+}
+
+/* ---- the hero: the title over a striped sun setting into the sea ---- */
+.hero {
+  position: relative; min-height: 100svh; display: grid; grid-template-rows: 1fr auto; overflow: hidden;
+  background: linear-gradient(180deg, #0F0820 0%, #2A1150 48%, #7A2370 74%, #D6456F 100%);
+}
+.hero-copy {
+  position: relative; z-index: 3; text-align: center; padding: clamp(3rem, 8vh, 6rem) 1.25rem 1rem;
+  display: flex; flex-direction: column; align-items: center;
+}
+.hero-icon { width: 64px; height: 64px; margin-bottom: 1.25rem; border-radius: 50%; }
+h1.lit { margin: 0; font-size: clamp(5.2rem, min(21vw, 17vh), 10rem); }
+h1 .line { display: block; }
+.tagline { margin: 1.1rem 0 2rem; font-size: clamp(1.05rem, 3.6vw, 1.35rem); color: var(--teal); font-weight: 600; }
+.tagline span { display: block; }
+.get {
+  display: inline-flex; align-items: center; gap: .6rem; padding: .95rem 1.7rem; border-radius: 4px;
+  background: var(--sunset); color: var(--midnight); text-decoration: none;
+  font: 600 1.15rem/1 "Chakra Petch", sans-serif; box-shadow: 0 0 2.2rem rgba(255, 62, 165, .45);
+}
+.get svg { width: 1.15em; height: 1.15em; }
+.get:hover { filter: brightness(1.08); }
+.fine { margin: .9rem 0 0; font-size: .9rem; color: var(--soft); }
+.qr { display: none; }
+@media (min-width: 900px) and (hover: hover) {
+  .qr { display: flex; gap: 1rem; align-items: center; margin-top: 2rem; color: var(--soft); max-width: 22rem; }
+  .qr img { width: 96px; border-radius: 4px; flex: none; }
+}
+
+/* the horizon sized from the sun: 70% of it above the sea, so it never reaches the words */
+.horizon { --s: min(78vw, 30rem); --sea: 7rem; position: relative; height: calc(var(--s) * .7 + var(--sea) + 1.5rem); z-index: 1; }
+.sun {
+  position: absolute; left: 50%; bottom: var(--sea); width: var(--s); aspect-ratio: 1; border-radius: 50%;
+  translate: -50% 30%; background: var(--sun);
+  /* the 80s sun: cut by bands that widen toward the sea */
+  -webkit-mask-image: linear-gradient(180deg, #000 0 36%, transparent 36% 38%, #000 38% 44%, transparent 44% 47%, #000 47% 52%, transparent 52% 56%, #000 56% 60%, transparent 60% 65%, #000 65% 68%, transparent 68% 74%, #000 74%);
+          mask-image: linear-gradient(180deg, #000 0 36%, transparent 36% 38%, #000 38% 44%, transparent 44% 47%, #000 47% 52%, transparent 52% 56%, #000 56% 60%, transparent 60% 65%, #000 65% 68%, transparent 68% 74%, #000 74%);
+  filter: drop-shadow(0 0 3rem rgba(255, 110, 90, .5));
+  animation: rise 2.2s cubic-bezier(.2, .7, .2, 1) both;
+}
+@keyframes rise { from { translate: -50% 70%; } to { translate: -50% 30%; } }
+.sea {
+  position: absolute; left: 0; right: 0; bottom: 0; height: var(--sea); z-index: 2;
+  background: linear-gradient(180deg, #160B2C, var(--midnight));
+  border-top: 1px solid rgba(255, 201, 77, .45);
+}
+.sea i { position: absolute; left: 50%; height: 3px; translate: -50% 0; background: var(--teal); border-radius: 2px; opacity: .85; box-shadow: 0 0 10px rgba(79, 240, 224, .7); }
+.sea i:nth-child(1) { top: 16%; width: min(40vw, 15rem); }
+.sea i:nth-child(2) { top: 34%; width: min(28vw, 10rem); opacity: .7; }
+.sea i:nth-child(3) { top: 52%; width: min(17vw, 6rem); opacity: .55; }
+.sea i:nth-child(4) { top: 68%; width: min(9vw, 3rem); opacity: .4; }
+
+/* ---- the app, screen by screen ---- */
+main { position: relative; z-index: 3; }
+.screens { max-width: 68rem; margin: 0 auto; padding: clamp(3rem, 8vw, 6.5rem) 1.25rem 2rem; display: grid; gap: clamp(4rem, 10vw, 7.5rem); }
+.screen { display: grid; gap: 1.75rem; align-items: center; justify-items: center; }
+.screen .words { max-width: var(--measure); }
+.screen h2 { margin: 0 0 .8rem; font-size: clamp(2.6rem, 8.5vw, 4.4rem); }
+.screen p { margin: 0; color: var(--text); }
+.phone {
+  margin: 0; width: min(72vw, 19rem); padding: .55rem; border-radius: 2.1rem; background: #05030B;
+  border: 1px solid #3B2160; box-shadow: 0 0 0 1px #000, 0 1.5rem 4rem rgba(0, 0, 0, .6), 0 0 3.5rem rgba(79, 240, 224, .08);
+}
+.phone img { border-radius: 1.65rem; width: 100%; }
+@media (min-width: 820px) {
+  .screen { grid-template-columns: 19rem 1fr; justify-items: start; gap: clamp(2.5rem, 6vw, 5.5rem); }
+  .screen:nth-child(even) { grid-template-columns: 1fr 19rem; }
+  .screen:nth-child(even) .phone { order: 2; }
+  .screen:nth-child(even) .words { justify-self: end; }
+}
+
+.ear { max-width: 68rem; margin: 0 auto; padding: 1rem 1.25rem clamp(4rem, 10vw, 7rem); }
+.ear h2 { margin: 0 0 1.2rem; font-size: clamp(3.4rem, 12vw, 7.5rem); max-width: 12ch; }
+.ear p { margin: 0; max-width: var(--measure); font-size: 1.15rem; }
+
+.more { max-width: 68rem; margin: 0 auto; padding: 1rem 1.25rem clamp(3rem, 8vw, 5rem); }
+.more h2 { font-size: clamp(2.4rem, 7vw, 3.6rem); margin: 0 0 1.5rem; }
+.more ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.1rem 3rem; max-width: 56rem; }
+@media (min-width: 820px) { .more ul { grid-template-columns: 1fr 1fr; } }
+.more li { padding-left: 1.4rem; position: relative; max-width: var(--measure); }
+.more li::before { content: ""; position: absolute; left: 0; top: .62em; width: .55rem; height: .55rem; border-radius: 50%; background: var(--teal); box-shadow: 0 0 8px var(--teal); }
+.more strong { color: var(--pink); font-weight: 600; }
+
+/* ---- installing: a real sequence, so numbered ---- */
+.install { background: var(--dusk); border-top: 1px solid #3B2160; border-bottom: 1px solid #3B2160; }
+.install-in { max-width: 68rem; margin: 0 auto; padding: clamp(3rem, 8vw, 5.5rem) 1.25rem; }
+.install h2 { font-size: clamp(2.4rem, 7vw, 3.6rem); margin: 0 0 2rem; }
+.install ol { margin: 0 0 2.2rem; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 1.6rem; max-width: 40rem; }
+.install li { counter-increment: step; display: grid; grid-template-columns: 3rem 1fr; column-gap: 1rem; }
+.install li::before {
+  content: counter(step); grid-row: span 2; font: 400 2.6rem/1 "Anton", sans-serif;
+  background: var(--sunset); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.install li b { font-weight: 600; color: var(--text); }
+.install li span { color: var(--soft); }
+
+/* ---- why it's safe ---- */
+.open { max-width: 68rem; margin: 0 auto; padding: clamp(3rem, 8vw, 5.5rem) 1.25rem; }
+.open h2 { font-size: clamp(2.4rem, 7vw, 3.6rem); margin: 0 0 1.2rem; }
+.open p { max-width: var(--measure); margin: 0 0 1rem; }
+.facts { margin: 1.8rem 0 0; display: grid; gap: .9rem; max-width: 46rem; }
+.facts div { display: grid; gap: .15rem; }
+.facts dt { color: var(--soft); font-size: .9rem; }
+.facts dd { margin: 0; color: var(--teal); font-weight: 600; overflow-wrap: anywhere; }
+.facts code { font: 600 .92rem/1.5 "Chakra Petch", sans-serif; letter-spacing: .02em; }
+
+footer { border-top: 1px solid #3B2160; }
+.foot { max-width: 68rem; margin: 0 auto; padding: 2.5rem 1.25rem 3.5rem; display: grid; gap: 1.4rem; color: var(--soft); font-size: .92rem; }
+.rain { color: var(--text); font-size: 1.05rem; }
+.foot p { margin: 0; max-width: 46rem; }
+
+@media (prefers-reduced-motion: reduce) { .sun { animation: none; } }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-copy">
+    <img class="hero-icon" src="img/icon.svg" alt="" width="64" height="64">
+    <h1 class="lit"><span class="line">Neon</span><span class="line">Coast</span></h1>
+    <p class="tagline"><span>The soundtrack to your city, after dark.</span> <span>A free music app for Android.</span></p>
+    <a class="get" href="https://github.com/thanmayroobanathans/ink-music-sunset/releases/download/neon-coast-latest/neon-coast.apk">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 3h2v10.2l3.6-3.6 1.4 1.4-6 6-6-6 1.4-1.4 3.6 3.6V3zM5 19h14v2H5z"/></svg>
+      Download for Android
+    </a>
+    <p class="fine">Version {{VERSION}}, {{SIZE}}. Android 12 or newer.</p>
+  </div>
+  <div class="horizon" aria-hidden="true">
+    <div class="sun"></div>
+    <div class="sea"><i></i><i></i><i></i><i></i></div>
+  </div>
+</header>
+
+<main>
+  <section class="screens" aria-label="The app">
+    <article class="screen">
+      <figure class="phone"><img src="img/shot-menu.webp" alt="The places menu: CRUISE, THE SCENE, RECORDS, CREWS, TRACKS, AIRWAVES in big glowing letters" width="608" height="1351" loading="lazy"></figure>
+      <div class="words">
+        <h2 class="lit">Every screen lit</h2>
+        <p>Headlines glow like a sunset over the sea. The rest is neon pink and teal on midnight, with a tape's scanlines over it all. Your music has places to go: cruise, the scene, records, airwaves, mixtapes.</p>
+      </div>
+    </article>
+    <article class="screen">
+      <figure class="phone"><img src="img/shot-player.webp" alt="The player: the cover, the song, and its name scrolling huge across the foot of the screen" width="608" height="1351" loading="lazy"></figure>
+      <div class="words">
+        <h2 class="lit">The cover is the player</h2>
+        <p>Circle your thumb round the cover to scrub through a song, the way you did on an iPod. Flick it for the next one. Songs can run into each other, beats matched, like a DJ set.</p>
+      </div>
+    </article>
+    <article class="screen">
+      <figure class="phone"><img src="img/shot-radio.webp" alt="Airwaves: live independent radio stations" width="608" height="1351" loading="lazy"></figure>
+      <div class="words">
+        <h2 class="lit">Live radio</h2>
+        <p>Sixty-two independent stations picked by hand, from KEXP in Seattle to NTS in London, each showing what it's playing right now. Thousands more to find by city or genre.</p>
+      </div>
+    </article>
+  </section>
+
+  <section class="ear" aria-labelledby="ear-h">
+    <h2 class="lit" id="ear-h">Your earphones, corrected</h2>
+    <p>Type your headphone model and the equalizer loads a correction measured for that exact model, from a library of thousands. Then shape the sound on top, the way you like it.</p>
+  </section>
+
+  <section class="more" aria-labelledby="more-h">
+    <h2 class="lit" id="more-h">And the small things</h2>
+    <ul>
+      <li><strong>Soft pause.</strong> Pause and the music breathes out instead of cutting off. Play, and it breathes back in.</li>
+      <li><strong>See the sound's path.</strong> Tap the format over any cover to see every step from the file to your ears.</li>
+      <li><strong>Picked by people.</strong> What critics and DJs at Pitchfork, Bandcamp Daily and NPR are picking, and a weekly chart of what independent radio played most.</li>
+      <li><strong>Music from anywhere.</strong> Your phone's files, your own music server, YouTube Music's catalogue, and any podcast feed you paste in.</li>
+      <li><strong>No ads, no account.</strong> Open it and play. Your listening history stays on your phone.</li>
+      <li><strong>Lyrics word by word.</strong> Each word lights up as it's sung. Tap a line to play from there.</li>
+    </ul>
+  </section>
+
+  <section class="install" aria-labelledby="install-h">
+    <div class="install-in">
+      <h2 class="lit" id="install-h">Getting it on your phone</h2>
+      <ol>
+        <li><b>Tap Download for Android.</b><span>The file is about {{SIZE}}.</span></li>
+        <li><b>Open the downloaded file.</b><span>Android asks before installing an app from outside the Play Store: allow it for your browser, then tap Install. If Play Protect says it doesn't recognise the app, that's because it's new to Google. Tap Install anyway.</span></li>
+        <li><b>Open Neon Coast.</b><span>It sits beside any music app you already have. Pick a few artists you love and it fills with music.</span></li>
+      </ol>
+      <a class="get" href="https://github.com/thanmayroobanathans/ink-music-sunset/releases/download/neon-coast-latest/neon-coast.apk">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 3h2v10.2l3.6-3.6 1.4 1.4-6 6-6-6 1.4-1.4 3.6 3.6V3zM5 19h14v2H5z"/></svg>
+        Download for Android
+      </a>
+      <div class="qr"><img src="img/qr.svg" alt="QR code for this page" width="96" height="96"><span>On a laptop? Scan this with your phone to open this page there.</span></div>
+    </div>
+  </section>
+
+  <section class="open" aria-labelledby="open-h">
+    <h2 class="lit" id="open-h">Open, all of it</h2>
+    <p>Neon Coast is <a href="https://github.com/inkappdev/ink-music">ink music</a>, an open-source music player, with a new look. Every line of its code is public. Every download is built from that code by GitHub's servers, not on someone's laptop, so what you install is what the code says.</p>
+    <p><a href="https://github.com/thanmayroobanathans/ink-music-sunset">See the code and every build</a></p>
+    <dl class="facts">
+      <div><dt>This build</dt><dd>{{VERSION}}, built {{BUILT}}</dd></div>
+      <div><dt>Its SHA-256, to check the file you downloaded</dt><dd><code>{{SHA256}}</code></dd></div>
+    </dl>
+  </section>
+</main>
+
+<footer>
+  <div class="foot">
+    <p class="rain">Prefer rain? <a href="https://github.com/thanmayroobanathans/ink-music-sunset/releases/download/vigil-latest/vigil.apk">Get Vigil</a>, the same app in a rain-soaked city after midnight.</p>
+    <p>Built on <a href="https://github.com/inkappdev/ink-music">ink music</a> by inkappdev, free software under the GNU GPL v3. Fonts: Anton and Chakra Petch, under the SIL Open Font License. An unofficial edition, not made by or affiliated with ink.</p>
+  </div>
+</footer>
+
+</body>
+</html>

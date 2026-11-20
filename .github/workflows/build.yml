@@ -133,6 +133,53 @@ jobs:
             --title "${EDITION_NAME} ${INK_TAG#v} (build ${GITHUB_RUN_NUMBER})" \
             --notes "ink music ${INK_TAG#v} built from the official source (inkappdev/ink-music, tag ${INK_TAG}) with this repo's ${EDITION_NAME} theme (themes/${EDITION}). Unofficial. GPL-3.0: the source is ink music's at that tag plus that folder."
 
+  site:
+    # Neon Coast's website (site/), with the newest build's version, size and SHA-256 written in, on GitHub Pages:
+    # https://thanmayroobanathans.github.io/ink-music-sunset/ (Pages must be on, its source "GitHub Actions")
+    needs: build
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Get the site (this repo)
+        uses: actions/checkout@v5
+
+      - name: Get Neon Coast's APK (the same file as the download link)
+        uses: actions/download-artifact@v4
+        with:
+          name: neon-coast-apk
+          path: apk
+
+      - name: Write the build's facts into the page
+        run: |
+          f=$(ls apk/*.apk | head -1)
+          size=$(python3 -c 'import os, sys; print(f"{os.path.getsize(sys.argv[1]) / 1048576:.1f} MB")' "$f")
+          sha=$(sha256sum "$f" | cut -d' ' -f1)
+          ver=$(grep -oE 'versionName = "[^"]+"' themes/neon-coast/app/build.gradle.kts | cut -d'"' -f2)
+          built=$(date -u +'%-d %B %Y')
+          sed -i "s|{{VERSION}}|$ver|g; s|{{SIZE}}|$size|g; s|{{SHA256}}|$sha|g; s|{{BUILT}}|$built|g" site/index.html
+          ! grep -n '{{' site/index.html
+          echo "version $ver, $size, built $built, sha256 $sha"
+
+      - name: Pages
+        uses: actions/configure-pages@v5
+
+      - name: Package the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Publish the site
+        id: deploy
+        uses: actions/deploy-pages@v4
+
   screens:
     # each built app on an emulator, photographed; never holds up a release
     name: screens ${{ matrix.edition.shots }}

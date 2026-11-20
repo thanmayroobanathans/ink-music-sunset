@@ -24,6 +24,17 @@ Both editions have frosted blur where content meets the bars, and in-app updates
 official build). The features and the layout of each screen are ink music's own. **Last.fm is not included**: it
 needs the developer's private API key, which isn't in the public source.
 
+## The website
+
+Neon Coast's page: **<https://thanmayroobanathans.github.io/ink-music-sunset/>**, built from `site/` and published by
+the workflow after every build, with that build's version, size and SHA-256 written in. For it to publish, GitHub Pages
+must be on: **Settings > Pages > Build and deployment > Source: GitHub Actions** (once).
+
+The newest APKs are always at the same two addresses (for the site, posters and QR codes):
+
+- Neon Coast: `https://github.com/thanmayroobanathans/ink-music-sunset/releases/download/neon-coast-latest/neon-coast.apk`
+- Vigil: `https://github.com/thanmayroobanathans/ink-music-sunset/releases/download/vigil-latest/vigil.apk`
+
 ## Get the APKs
 
 Every push to the default branch builds both editions (about 6 minutes) and publishes each under **Releases**.
@@ -48,6 +59,7 @@ If it's a download problem on GitHub's side, **Re-run all jobs** first.
 - `.github/workflows/build.yml`: for each edition, gets ink music `v2.1.26`, copies `themes/<edition>/` over it,
   and runs `./gradlew -PphoneOnly :app:assembleFullRelease`. Then the emulator screenshots.
 - `.github/screens.sh`: the emulator walk-through.
+- `site/`: Neon Coast's website (one page; its fonts, icon, screenshots and link-preview image beside it).
 - `themes/neon-coast/`, `themes/vigil/`: each edition's changed files, at the same paths as in ink music's source.
 - `patches/`: the same changes as diffs against `v2.1.26`.
 - `fonts/`: the licences of the four fonts (SIL Open Font License 1.1).
