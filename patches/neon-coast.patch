@@ -10853,3 +10853,17 @@ index 0000000..0f7df48
 +open(os.path.join(OUT, "icon_preview.svg"), "w").write(svg())
 +open(os.path.join(OUT, "icon_preview_square.svg"), "w").write(svg(mask_circle=False))
 +print("written to", OUT)
+diff --git a/youtube/src/commonMain/kotlin/app/ink/music/TubeVideos.kt b/youtube/src/commonMain/kotlin/app/ink/music/TubeVideos.kt
+index 5fa8679..806cdd2 100644
+--- a/youtube/src/commonMain/kotlin/app/ink/music/TubeVideos.kt
++++ b/youtube/src/commonMain/kotlin/app/ink/music/TubeVideos.kt
+@@ -48,7 +48,8 @@ object TubeVideos {
+         var body = JSONObject().put("browseId", channel).put("params", VIDEOS_TAB)
+         for (i in 0 until pages.coerceAtLeast(1)) {
+             val page = runCatching { post(WEB, "browse", web, body) }.getOrNull() ?: break
+-            read(page).forEach { out.putIfAbsent(it.id, it) }
++            // the first of each kept, by hand (putIfAbsent is Java's alone: the iPhone's build stopped on it)
++            read(page).forEach { if (it.id !in out) out[it.id] = it }
+             // the grid's last item is what asks for more (the first continuationItemRenderer on the page): its token, if there's more. Not any
+             // continuation on the page: the sort chips (latest, popular, oldest) have theirs too, and the last of those
+             // answered the channel's front page, no videos (2026-11-12)
