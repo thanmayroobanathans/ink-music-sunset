@@ -354,7 +354,7 @@ jobs:
     # an unsigned .ipa to sideload (AltStore, SideStore, Sideloadly sign it with your own Apple ID), and a run in the
     # iPhone simulator, photographed
     name: iphone ${{ matrix.edition.name }}
-    needs: build
+    # not after the phones' build: it's the slowest, and the release it adds to is there already
     runs-on: macos-15
     timeout-minutes: 90
     strategy:

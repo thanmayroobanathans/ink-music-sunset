@@ -5459,6 +5459,59 @@ index 6013020..cdbf682 100644
          }
          // the mast and its ball
          line(tipX, tipY + 2, tipX, top)
+diff --git a/core/src/commonMain/kotlin/app/ink/music/Similar.kt b/core/src/commonMain/kotlin/app/ink/music/Similar.kt
+index 82abd74..78716d6 100644
+--- a/core/src/commonMain/kotlin/app/ink/music/Similar.kt
++++ b/core/src/commonMain/kotlin/app/ink/music/Similar.kt
+@@ -10,16 +10,19 @@ object Similar {
+     data class Track(val title: String, val artist: String, val weight: Double)
+ 
+     private val deezerIds = HashMap<String, Long?>()
++    // core's Guard, not synchronized (the JVM's alone: the iPhone's build stopped on it; the editions', 2026-11-21)
++    private val deezerGuard = Guard()
+ 
+     /** Deezer's id for an artist, by name (the first whose name is theirs). */
+     private fun deezerId(artist: String): Long? {
+         val k = artist.lowercase().trim()
+-        synchronized(deezerIds) { if (deezerIds.containsKey(k)) return deezerIds[k] }
++        val (had, was) = deezerGuard.run { deezerIds.containsKey(k) to deezerIds[k] }
++        if (had) return was
+         val id = runCatching {
+             val a = JSONObject(Curation.get("https://api.deezer.com/search/artist?q=${urlEncode(artist)}&limit=5")).optJSONArray("data") ?: return@runCatching null
+             (0 until a.length()).map { a.getJSONObject(it) }.firstOrNull { Curation.folded(it.optString("name")) == Curation.folded(artist) }?.optLong("id")
+         }.getOrNull()
+-        synchronized(deezerIds) { deezerIds[k] = id }
++        deezerGuard.run { deezerIds[k] = id }
+         return id
+     }
+ 
+diff --git a/core/src/commonMain/kotlin/app/ink/music/SponsorBlock.kt b/core/src/commonMain/kotlin/app/ink/music/SponsorBlock.kt
+index 1cf3629..15a9e53 100644
+--- a/core/src/commonMain/kotlin/app/ink/music/SponsorBlock.kt
++++ b/core/src/commonMain/kotlin/app/ink/music/SponsorBlock.kt
+@@ -9,10 +9,12 @@ package app.ink.music
+  */
+ object SponsorBlock {
+     private val kept = HashMap<String, List<LongRange>>()
++    // core's Guard, not synchronized (the JVM's alone: the iPhone's build stopped on it; the editions', 2026-11-21)
++    private val keptGuard = Guard()
+ 
+     /** The parts of `video` (a YouTube id, no "y") that aren't music, in ms, in order; none where nobody's marked any. */
+     fun notMusic(video: String): List<LongRange> {
+-        synchronized(kept) { kept[video]?.let { return it } }
++        keptGuard.run { kept[video] }?.let { return it }
+         val hash = sha256(video.encodeToByteArray()).hex()
+         val got = runCatching {
+             val r = http("https://sponsor.ajay.app/api/skipSegments/${hash.take(4)}?categories=" + urlEncode("[\"music_offtopic\"]"),
+@@ -33,7 +35,7 @@ object SponsorBlock {
+                         }.sortedBy { it.first }
+                 }.orEmpty()
+         }.getOrElse { return emptyList() }
+-        synchronized(kept) { kept[video] = got }
++        keptGuard.run { kept[video] = got }
+         return got
+     }
+ }
 diff --git a/core/src/jvmMain/kotlin/app/ink/music/SpotifyCanvas.kt b/core/src/jvmMain/kotlin/app/ink/music/SpotifyCanvas.kt
 index 634ccc0..1063637 100644
 --- a/core/src/jvmMain/kotlin/app/ink/music/SpotifyCanvas.kt
