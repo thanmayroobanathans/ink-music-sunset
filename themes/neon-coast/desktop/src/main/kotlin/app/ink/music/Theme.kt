@@ -1,0 +1,370 @@
+package app.ink.music
+
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.positionInParent
+import kotlinx.coroutines.launch
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+
+// The look: black, warm white ink, brightness for selection, album art the only colour.
+object Ink {
+    val black = Color(0xFF0F0820)                 // NEON COAST: midnight (was Color.Black)
+    /** [black] as an ARGB int, for pictures drawn dot by dot (the dither's off dots). */
+    const val blackArgb: Int = 0xFF0F0820.toInt()
+    val ink = Color(0xFFFF6FB5)                   // neon pink (was 0xFFF1F0EC, warm white)
+    /** The second neon: what's secondary is teal, not the ink dimmed. */
+    val teal = Color(0xFF4FF0E0)
+    /** Bright light (the light sensor: sunlight): the dim words a step brighter, so they read outdoors. */
+    var sun by androidx.compose.runtime.mutableStateOf(false)
+    val mid get() = teal.copy(alpha = if (sun) 1f else .86f)    // hover / secondary: teal
+    val dim get() = ink.copy(alpha = if (sun) .62f else .44f)   // unselected
+    val line = teal.copy(alpha = .22f)  // hairlines, teal
+    val plate = Color(0xFF221238)                 // dusk (was 0xFF141414)
+}
+
+/** The sunset every headline in the ink is lit with, left to right: hot pink, coral, gold. */
+val Sunset: androidx.compose.ui.graphics.Brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+    listOf(Color(0xFFFF3EA5), Color(0xFFFF7A59), Color(0xFFFFC94D)),
+)
+private val Glow = Color(0xFFFF3EA5)
+
+// Two fonts, never a third: Archivo Black UPPERCASE, Silkscreen lowercase.
+// (on the desktop read from the jar: the app's own font files, its resources)
+val Archivo = FontFamily(font("archivo_black"))
+val Pixel = FontFamily(font("silkscreen"))
+
+private fun font(name: String) = androidx.compose.ui.text.platform.Font(
+    name, Ink::class.java.getResourceAsStream("/$name.ttf")!!.use { it.readBytes() },
+)
+
+private val tight = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both)
+
+/** A headline. In the ink it's lit with the [Sunset] and glows pink; in any other colour, that colour, glowing faintly. */
+fun headline(size: TextUnit, color: Color = Ink.ink): TextStyle {
+    val lit = color == Ink.ink
+    val s = settable(size)
+    val glow = androidx.compose.ui.graphics.Shadow(
+        color = if (lit) Glow.copy(alpha = .7f) else color.copy(alpha = color.alpha * .45f),
+        offset = Offset.Zero,
+        blurRadius = (s.value * .7f).coerceIn(6f, 60f),
+    )
+    return if (lit) TextStyle(
+        brush = Sunset, fontFamily = Archivo, fontSize = s, shadow = glow,
+        letterSpacing = 0.015.em, lineHeight = 1.0.em, lineHeightStyle = tight,
+    ) else TextStyle(
+        color = color, fontFamily = Archivo, fontSize = s, shadow = glow,
+        letterSpacing = 0.015.em, lineHeight = 1.0.em, lineHeightStyle = tight,
+    )
+}
+
+/**
+ * Words set whole: where the longest word won't fit the room it's given, the type a little smaller (to 60% at the
+ * least) rather than the word broken across two lines (2026-11-09: "JOHANNESBU / RG" in the bar along the foot,
+ * "JOHANNESB / URG" in a narrow player). Past 60% it breaks as it did.
+ */
+@Composable
+fun WholeWords(text: String, style: TextStyle, maxLines: Int, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier) {
+        val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+        val room = constraints.maxWidth
+        val widest = androidx.compose.runtime.remember(text, style) {
+            text.split(' ', '\n').filter { it.isNotEmpty() }.maxOfOrNull { measurer.measure(it, style, maxLines = 1, softWrap = false).size.width } ?: 0
+        }
+        val k = if (constraints.hasBoundedWidth && widest > room && widest > 0) (room.toFloat() / widest).coerceIn(.6f, 1f) else 1f
+        BasicText(text, style = if (k < 1f) style.copy(fontSize = style.fontSize * k) else style, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * A size Skia can set type at: never 0, never without end, always a number. Words sized from the room they're given
+ * (a cover's name from its side, a station's on its sleeve, a list's on its tile) come to 0 where there's no room at
+ * all, and Skia works a line's height out as a share of the size: 0 / 0, not a number, which it refuses ("Check
+ * failed."), and the window never opens ("Failed to launch JVM"). A PC with an upright screen, 2026-11-09: at every
+ * start once a song was left in the bar along the foot, its cover squeezed to nothing by the bar's other things.
+ */
+private fun settable(size: TextUnit): TextUnit = when {
+    !size.isSp -> size
+    size.value.isNaN() -> 1.sp
+    else -> size.value.coerceIn(1f, 2000f).sp
+}
+
+fun pixel(size: TextUnit, color: Color = Ink.ink) = TextStyle(
+    fontFamily = Pixel, fontSize = readable(size), color = color, lineHeight = 1.4.em, letterSpacing = 0.03.em,
+)
+
+/**
+ * Silkscreen's pixels blur together below 12 sp (2026-10-25: the small words were hard to
+ * read): 12 at the least, the sizes just over it a step up, 14 and above as asked.
+ */
+private fun readable(size: TextUnit): TextUnit = when {
+    size.value < 12f -> 12.sp
+    size.value < 14f -> (size.value + 1f).sp
+    else -> settable(size)
+}
+
+// MOTION.md: one curve (ease-out-expo), no overshoot, nothing over ~300 ms.
+object Motion {
+    val expo = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
+    const val FADE = 150
+    const val ENTER = 260
+    const val EXIT = 140
+    const val STAGGER = 50
+    val drift = 20.dp
+}
+
+// Arrive: rise 20 px and fade in, `order` widgets apart, every time `key` changes, and every
+// time `again` ticks (read as it runs, not while composing: a list kept composed arrives again
+// each time it's shown without recomposing a word).
+/**
+ * A press that's felt as well as seen: every word ink lets you tap gives the lightest click
+ * (Android's context click; [kind] for a toggle, a hold, a key). Follows the phone's own touch
+ * vibration setting, as every haptic does.
+ */
+@Composable
+fun felt(
+    kind: androidx.compose.ui.hapticfeedback.HapticFeedbackType = androidx.compose.ui.hapticfeedback.HapticFeedbackType.ContextClick,
+    then: () -> Unit,
+): () -> Unit {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    return { haptic.performHapticFeedback(kind); then() }
+}
+
+fun Modifier.arrive(order: Int, key: Any?, again: androidx.compose.runtime.State<Int>? = null): Modifier = composed {
+    val shift = with(LocalDensity.current) { Motion.drift.toPx() }
+    val t = remember { Animatable(0f) }
+    LaunchedEffect(key, again) {
+        suspend fun go() {
+            t.snapTo(0f)
+            delay(order * Motion.STAGGER.toLong())
+            t.animateTo(1f, tween(Motion.ENTER, easing = Motion.expo))
+        }
+        if (again == null) go()
+        else androidx.compose.runtime.snapshotFlow { again.value }.collectLatest { go() }
+    }
+    graphicsLayer {
+        alpha = t.value
+        translationY = (1f - t.value) * shift
+        compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha   // no offscreen buffer
+    }
+}
+
+/**
+ * Text that arrives fades in word by word (MOTION.md 9): each word 150 ms, 50 ms apart, a whole
+ * line within 0.7 s. Only words the text gains fade: what was already up stays (the date stays
+ * when the weather joins it). With `from`, words light from that colour instead of from nothing
+ * (the sung lyric line, dim to ink). One text, so wrapping and ellipsis behave as BasicText's.
+ */
+@Composable
+fun FadeText(
+    text: String,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+    maxLines: Int = Int.MAX_VALUE,
+    overflow: TextOverflow = TextOverflow.Clip,
+    softWrap: Boolean = true,
+    from: Color? = null,
+) {
+    val words = remember(text) { Regex("""\S+""").findAll(text).map { it.range }.toList() }
+    val last = remember { arrayOf<String?>(null) }            // the text fully up before this one
+    val kept = remember(text) { sharedWords(last[0], text) }  // its words that stay put
+    val fading = (words.size - kept).coerceAtLeast(0)
+    val gap = if (fading > 1) minOf(Motion.STAGGER.toFloat(), (700f - WORD) / (fading - 1)) else 0f
+    val total = WORD + gap * (fading - 1).coerceAtLeast(0)
+    val t = remember(text) { Animatable(0f) }
+    LaunchedEffect(text) {
+        t.animateTo(total, tween(total.toInt(), easing = LinearEasing))
+        last[0] = text
+    }
+    // Laid out once; while it fades only the drawing changes: each word drawn in its own colour
+    // through a clip around it (rebuilding styled text every frame cost the onn a frame a frame)
+    val laid = remember { arrayOfNulls<TextLayoutResult>(1) }
+    val lit = style.brush   // a lit headline: its brush, faded in as itself
+    val base = if (style.color != Color.Unspecified) style.color else Ink.ink
+    val reach = with(LocalDensity.current) { (if (style.fontSize.isSp) style.fontSize.toPx() else 16f) * .25f }
+    BasicText(
+        text,
+        modifier.drawWithContent {
+            val now = t.value
+            if (now >= total) { drawContent(); return@drawWithContent }   // all up: drawn as plain text
+            val l = laid[0] ?: return@drawWithContent
+            words.forEachIndexed { i, r ->
+                val k = i - kept
+                val a = if (k < 0) 1f else Motion.expo.transform(((now - k * gap) / WORD).coerceIn(0f, 1f))
+                if (a <= 0f && from == null) return@forEachIndexed
+                val c = if (from != null) lerp(from, base, a) else base.copy(alpha = base.alpha * a)
+                val top = l.getLineForOffset(r.first)
+                val bottom = l.getLineForOffset(r.last)
+                for (line in top..bottom) {
+                    val s0 = if (line == top) r.first else l.getLineStart(line)
+                    val e0 = if (line == bottom) r.last + 1 else l.getLineEnd(line, visibleEnd = true)
+                    if (e0 <= s0) continue
+                    val x0 = l.getHorizontalPosition(s0, true)
+                    val x1 = l.getHorizontalPosition(e0, true)
+                    clipRect(minOf(x0, x1) - reach, l.getLineTop(line), maxOf(x0, x1) + reach, l.getLineBottom(line)) {
+                        if (lit != null) {
+                            if (from != null) drawText(l, color = from)
+                            drawText(l, brush = lit, alpha = a)
+                        } else drawText(l, color = c)
+                    }
+                }
+            }
+        },
+        style,
+        onTextLayout = { laid[0] = it },
+        maxLines = maxLines, overflow = overflow, softWrap = softWrap,
+    )
+}
+
+private const val WORD = 150f   // ms each word takes to come up
+
+/** How many leading words `new` shares with `old` (those don't fade again). */
+private fun sharedWords(old: String?, new: String): Int {
+    if (old == null) return 0
+    val a = old.split(Regex("""\s+""")).filter { it.isNotEmpty() }
+    val b = new.split(Regex("""\s+""")).filter { it.isNotEmpty() }
+    var n = 0
+    while (n < a.size && n < b.size && a[n] == b[n]) n++
+    return n
+}
+
+
+/**
+ * A word that changes place slides there (260 ms, the one curve) instead of jumping: where it was
+ * laid out last in its parent is kept, and the difference eased away as it's drawn (the TV's
+ * lists as a word is carried, home's notification words as a new one comes in ahead of them).
+ */
+fun Modifier.slideToPlace(still: () -> Boolean = { false }): Modifier = composed {
+    val scope = rememberCoroutineScope()
+    val last = remember { floatArrayOf(Float.NaN, Float.NaN) }
+    val from = remember { floatArrayOf(0f, 0f) }
+    val left = remember { mutableFloatStateOf(0f) }   // 1 at the start of a slide, 0 at rest
+    val held = androidx.compose.runtime.rememberUpdatedState(still)
+    this.onPlaced { c ->
+        val at = c.positionInParent()
+        val wasX = last[0]; val wasY = last[1]
+        last[0] = at.x; last[1] = at.y
+        // held still (a word being carried by a finger, which places it itself): no slide
+        if (held.value()) { left.floatValue = 0f; return@onPlaced }
+        if (!wasX.isNaN() && (wasX != at.x || wasY != at.y)) {
+            from[0] = wasX - at.x + from[0] * left.floatValue
+            from[1] = wasY - at.y + from[1] * left.floatValue
+            left.floatValue = 1f
+            scope.launch {
+                androidx.compose.animation.core.animate(1f, 0f, animationSpec = tween(Motion.ENTER, easing = Motion.expo)) { v, _ -> left.floatValue = v }
+            }
+        }
+    }.graphicsLayer { translationX = from[0] * left.floatValue; translationY = from[1] * left.floatValue }
+}
+
+/** A word that arrives on its own (a new notification): it fades up once, 150 ms. */
+fun Modifier.fadeUp(): Modifier = composed {
+    val a = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { a.animateTo(1f, tween(WORD.toInt(), easing = Motion.expo)) }
+    graphicsLayer { alpha = a.value }
+}
+
+/**
+ * A pixel sprite on Silkscreen's grid ('#' or 'X' is a pixel), so a glyph reads as more of the
+ * type, not an icon: the cog, the padlock (the desktop bar's, waybar/lock/make-lock.py).
+ */
+@Composable
+fun Sprite(rows: List<String>, color: Color, cell: Dp, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(cell * rows[0].length, cell * rows.size)) {
+        val px = cell.toPx()
+        // each pixel snapped to whole device pixels, edge to edge, so no seams show between them
+        fun at(i: Int) = kotlin.math.round(i * px)
+        rows.forEachIndexed { y, row ->
+            row.forEachIndexed { x, ch ->
+                if (ch == '#' || ch == 'X') {
+                    drawRect(color, Offset(at(x), at(y)), Size(at(x + 1) - at(x), at(y + 1) - at(y)))
+                }
+            }
+        }
+    }
+}
+
+// the padlock, shut, with a blank row on top so it lines up with the raised one
+val LOCK = listOf(
+    ".......",
+    "..###..",
+    ".#...#.",
+    ".#...#.",
+    "#######",
+    "#######",
+    "###.###",
+    "###.###",
+    "#######",
+)
+
+// the padlock, open: the shackle raised, its left leg out
+val UNLOCK = listOf(
+    "..###..",
+    ".#...#.",
+    ".#...#.",
+    ".....#.",
+    "#######",
+    "#######",
+    "###.###",
+    "###.###",
+    "#######",
+)
+
+/**
+ * NEON COAST over everything: a tape's scanlines, and the sunset's glow low on the screen. It only draws (nothing
+ * under it loses a touch), in a layer of its own, so it's drawn again only when the screen's size changes.
+ */
+@Composable
+fun NeonCoastOverlay(modifier: Modifier) {
+    Canvas(modifier.graphicsLayer { }) {
+        val h = size.height
+        val w = size.width
+        drawRect(
+            androidx.compose.ui.graphics.Brush.verticalGradient(
+                0f to Color.Transparent, .78f to Color.Transparent, 1f to Glow.copy(alpha = .13f),
+                startY = 0f, endY = h,
+            ),
+        )
+        val step = 4.dp.toPx().coerceAtLeast(3f)
+        val dark = Color.Black.copy(alpha = .10f)
+        var y = 0f
+        while (y < h) { drawLine(dark, Offset(0f, y), Offset(w, y), strokeWidth = 1f); y += step }
+    }
+}

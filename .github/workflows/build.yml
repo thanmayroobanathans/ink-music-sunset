@@ -248,3 +248,103 @@ jobs:
           gh release create "screens-${SHOTS}-build${GITHUB_RUN_NUMBER}" shots/* --draft \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Screens: ${SHOTS}, build ${GITHUB_RUN_NUMBER}" --notes "The built app on an emulator."
+
+  windows:
+    # each edition's computer app (ink music's desktop/, in the edition's look and name), built on Windows into an
+    # msi (installed just for you, no administrator), then installed, opened and photographed there
+    name: windows ${{ matrix.edition.name }}
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        edition:
+          - { id: neon-coast, name: Neon Coast }
+          - { id: vigil, name: Vigil }
+    env:
+      EDITION: ${{ matrix.edition.id }}
+      EDITION_NAME: ${{ matrix.edition.name }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Get the themes (this repo)
+        uses: actions/checkout@v5
+        with:
+          path: theme-repo
+
+      - name: Get ink music ${{ env.INK_TAG }} (the official source)
+        uses: actions/checkout@v5
+        with:
+          repository: inkappdev/ink-music
+          ref: ${{ env.INK_TAG }}
+          path: ink-music
+
+      - name: Lay the ${{ matrix.edition.name }} theme over it
+        run: |
+          cp -r "theme-repo/themes/$EDITION/." ink-music/
+          git -C ink-music status --short -- desktop
+
+      - name: JetBrains' Java 21 (ink's own title bar on Windows)
+        uses: actions/setup-java@v5
+        with:
+          distribution: jetbrains
+          java-version: "21"
+          java-package: jdk
+
+      - name: The Java the app carries
+        run: echo "INK_RUNTIME=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: libmpv (mpv's own Windows build, x86-64), beside the app
+        run: |
+          url=$(gh api repos/shinchiro/mpv-winbuild-cmake/releases/latest --jq '.assets[].browser_download_url' \
+            | grep -E '/mpv-dev-x86_64-[0-9]{8}[^/]*\.7z$' | head -1)
+          [ -n "$url" ] || { echo "couldn't find mpv's Windows build"; exit 1; }
+          echo "$url"
+          curl -fsSL -o "$RUNNER_TEMP/mpv.7z" "$url"
+          7z x "$RUNNER_TEMP/mpv.7z" -o"$RUNNER_TEMP/mpv" > /dev/null
+          mkdir -p ink-music/desktop/native/windows-x64
+          cp "$RUNNER_TEMP/mpv/libmpv-2.dll" ink-music/desktop/native/windows-x64/
+          ls -l ink-music/desktop/native/windows-x64
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the msi
+        working-directory: ink-music
+        run: ./gradlew.bat :desktop:packageInkMsi -PdesktopOnly --no-daemon --stacktrace
+
+      - name: Name it
+        run: |
+          mkdir out
+          cp ink-music/desktop/build/compose/binaries/main/msi/*.msi "out/${EDITION}.msi"
+          ls -l out
+
+      - name: Upload (Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.edition.id }}-msi
+          path: out/*.msi
+
+      - name: The permanent link, and this build's release
+        # releases/download/<edition>-latest/<edition>.msi, beside the apk
+        if: github.ref_name == github.event.repository.default_branch
+        run: |
+          gh release upload "${EDITION}-latest" "out/${EDITION}.msi" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "${EDITION}-${INK_TAG#v}-build${GITHUB_RUN_NUMBER}" "out/${EDITION}.msi" --repo "$GITHUB_REPOSITORY" --clobber || true
+
+      - name: Install it, open it, photograph it
+        shell: pwsh
+        continue-on-error: true
+        run: .\theme-repo\.github\windows-screens.ps1
+
+      - name: The pictures, to a draft release
+        if: always()
+        continue-on-error: true
+        run: |
+          ls shots/*.png > /dev/null 2>&1 || { echo "no screenshots"; exit 0; }
+          gh release create "screens-windows-${EDITION}-build${GITHUB_RUN_NUMBER}" shots/* --draft \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Screens: windows ${EDITION}, build ${GITHUB_RUN_NUMBER}" --notes "The msi installed and opened on Windows."

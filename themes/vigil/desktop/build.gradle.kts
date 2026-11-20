@@ -1,0 +1,216 @@
+import java.time.LocalDate
+import java.util.Properties
+import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
+
+// ink music on a Mac (Linux and Windows later): the same look, the library from a folder and the
+// server, sound by libmpv (bundled into the app by the GitHub Action: native/macos-arm64)
+plugins {
+    id("org.jetbrains.kotlin.jvm")
+    id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.compose")
+}
+
+// the phone's version, one for both (app/build.gradle.kts' versionName): what the computer's updater compares, and the
+// packages' own (a Mac's must start above 0, Windows' msi upgrades by it)
+version = Regex("versionName = \"([^\"]+)\"").find(rootProject.file("app/build.gradle.kts").readText())!!.groupValues[1]
+
+kotlin { jvmToolchain(21) }
+
+// the two fonts and ink radio's stations, the app's own files (never a copy that could drift); and the keys the build was given
+val keys = layout.buildDirectory.dir("generated/keys")
+// yt-dlp's solver, the phone's own copy (app/src/full/assets/ejs), as ejs/ beside them: what works out a signed-in stream
+// (your uploads to YouTube Music, Solve.kt)
+val ejs = layout.buildDirectory.dir("generated/ejs")
+val copyEjs by tasks.registering(Sync::class) {
+    from(rootProject.file("app/src/full/assets/ejs")) { include("*.js") }
+    into(ejs.map { it.dir("ejs") })
+}
+sourceSets.main { resources.srcDir("../app/src/main/res/font"); resources.srcDir("../app/src/main/assets"); resources.srcDir(keys); resources.srcDir(ejs) }
+
+// Last.fm's key and secret, from keystore.properties (here) or the environment (the GitHub Action's secrets),
+// written for the app to read; never in git
+val writeKeys by tasks.registering {
+    val from = rootProject.file("keystore.properties")
+    val out = keys.map { it.file("keys.properties") }
+    val version = project.version.toString()
+    // which build this is (the Action's commit, else "here"), said at the foot of settings: builds of one version look alike to macOS
+    val build = (System.getenv("GITHUB_SHA")?.take(7) ?: "here") + " " + LocalDate.now()
+    inputs.property("env", listOf(System.getenv("LASTFM_KEY").orEmpty(), System.getenv("LASTFM_SECRET").orEmpty()).joinToString())
+    inputs.property("build", build)
+    inputs.property("version", version)
+    if (from.exists()) inputs.file(from)
+    outputs.file(out)
+    doLast {
+        val p = Properties()
+        if (from.exists()) from.inputStream().use { p.load(it) }
+        val key = System.getenv("LASTFM_KEY") ?: p.getProperty("lastfmKey").orEmpty()
+        val secret = System.getenv("LASTFM_SECRET") ?: p.getProperty("lastfmSecret").orEmpty()
+        out.get().asFile.apply { parentFile.mkdirs() }.writeText("lastfmKey=$key\nlastfmSecret=$secret\nversion=$version\nbuild=$build\n")
+    }
+}
+tasks.named("processResources") { dependsOn(writeKeys, copyEjs) }
+
+dependencies {
+    // Compose's desktop bundle without Material (and its ripple): ink draws with foundation alone, and Material came
+    // along unused, 1.6 MB in every download (2026-11-09)
+    implementation(compose.desktop.currentOs) { exclude(group = "org.jetbrains.compose.material") }
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.11.0")
+    // libmpv's client API, called by hand (LGPL / Apache-2.0)
+    implementation("net.java.dev.jna:jna:5.19.1")
+    // a file's tags and cover (LGPL)
+    implementation("net.jthink:jaudiotagger:3.0.1")
+    // speakers found on the network (mDNS; Apache-2.0)
+    implementation("org.jmdns:jmdns:3.6.4")
+    implementation("org.json:json:20240303")
+    // the pairing's QR code, for the phone's camera (Apache-2.0; core alone, no Swing or camera parts)
+    implementation("com.google.zxing:core:3.5.3")
+    // YouTube Music: its API by hand (the phone's InnerTube.kt, shared), its streams through NewPipe's extractor (GPL-3.0)
+    implementation(project(":youtube"))
+    implementation(project(":core"))
+    // JetBrains' Java's own API (the title bar, InkTitle): Compose carries it into the app already, at this version
+    compileOnly("org.jetbrains.runtime:jbr-api:1.9.0")
+    // Windows: ANGLE (libEGL, libGLESv2), what skiko draws through there (Main.kt sets skiko.renderApi): Direct3D's
+    // own stretched the last frame to a window being resized, and it shook (2026-11-09). Its version is skiko's own,
+    // which Compose brings (skiko-awt-runtime-windows-x64 in the app): move it with Compose's
+    if (System.getProperty("os.name").startsWith("Windows")) runtimeOnly("org.jetbrains.skiko:skiko-awt-runtime-angle-windows-x64:0.150.2")
+}
+
+compose.desktop {
+    application {
+        mainClass = "app.ink.music.MainKt"
+        // the Java the app carries: INK_RUNTIME where it's given, else the one building it. Windows' is JetBrains' own
+        // (JBR 21, github.com/JetBrains/JetBrainsRuntime), whose custom title bar lets ink's black run to the window's
+        // top with Windows' own buttons over it, snapping and all (InkTitle, Desk.kt; 2026-11-09). On another Java the
+        // app runs as before, Windows' black-tinted bar over it
+        System.getenv("INK_RUNTIME")?.takeIf { it.isNotBlank() }?.let { javaHome = it }
+        jvmArgs += listOf("-Dapple.awt.application.appearance=NSAppearanceNameDarkAqua")
+        // Linux: linuxWindow() sets AWT's own name and window-manager fields
+        jvmArgs += listOf("--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED")
+        // memory kept down (2026-11-10, a Reddit report: near 1 GB): ink's live heap is ~45 MB, but Java took a 64th of
+        // the RAM to start (520 MB here) and could grow to a quarter (8 GB), so its garbage sat uncollected. Started
+        // small, kept under 768 MB, and what's idle handed back to the system every 20 s; repeated strings shared
+        jvmArgs += listOf("-Xms64m", "-Xmx768m", "-XX:+UseG1GC", "-XX:G1PeriodicGCInterval=20000",
+            "-XX:MinHeapFreeRatio=10", "-XX:MaxHeapFreeRatio=30", "-XX:+UseStringDeduplication")
+        nativeDistributions {
+            // each made on its own system (the Action's): the Mac's dmg, Windows' msi, Linux's deb and rpm
+            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
+            packageName = "Vigil"
+            packageVersion = project.version.toString()
+            description = "Vigil, an edition of ink music"
+            vendor = "Vigil"
+            licenseFile.set(rootProject.file("LICENSE"))
+            // libmpv and what it needs, put there by the build (native/<os>-<arch>/), read at run time
+            // from compose.application.resources.dir
+            appResourcesRootDir.set(project.layout.projectDirectory.dir("native"))
+            // what the app reaches for (Compose's suggestRuntimeModules), and the naming and sql jaudiotagger and JmDNS use
+            modules("java.instrument", "java.net.http", "java.sql", "java.naming", "jdk.dynalink", "jdk.unsupported")
+            windows {
+                // installed for you alone (no administrator), in the start menu, its own upgrade id so a new one replaces the old
+                perUserInstall = true
+                menu = true
+                shortcut = true
+                menuGroup = "Vigil"
+                upgradeUuid = "8a2d4f16-7c3e-4e91-b5a0-2f9c6d1e8b73"
+                project.file("ink-music.ico").takeIf { it.exists() }?.let { iconFile.set(it) }
+            }
+            linux {
+                // a package's name can't have a space
+                packageName = "ink-music"
+                debMaintainer = "hello@inkhome.app"
+                menuGroup = "AudioVideo"
+                appCategory = "Audio"
+                project.file("src/main/resources/ink-music.png").takeIf { it.exists() }?.let { iconFile.set(it) }
+            }
+            macOS {
+                bundleID = "app.ink.music"
+                appCategory = "public.app-category.music"
+                project.file("ink-music.icns").takeIf { it.exists() }?.let { iconFile.set(it) }
+                // macOS 15 asks before an app reaches the home network (the server, the speakers); without this it
+                // never asks, and every connection there fails. The speakers are found as Cast services
+                infoPlist {
+                    extraKeysRawXml = """
+                        <key>NSLocalNetworkUsageDescription</key>
+                        <string>ink music plays the music on your own server, and on your speakers, on your network.</string>
+                        <key>NSBonjourServices</key>
+                        <array><string>_googlecast._tcp</string><string>_inkmusic._tcp</string></array>
+                    """.trimIndent()
+                }
+            }
+        }
+    }
+}
+
+// Linux plays through the system's libmpv (it isn't carried in the app): the packages ask for it, so dnf, apt or the
+// software store brings it with ink music (Compose's linux {} has no word for this; jpackage's own flag does).
+// rpm by what it provides (Fedora's mpv-libs, openSUSE's libmpv2); deb by name (libmpv1 on Ubuntu 22.04 and older)
+tasks.withType<AbstractJPackageTask>().configureEach {
+    when (targetFormat) {
+        TargetFormat.Rpm -> {
+            freeArgs.addAll("--linux-package-deps", "libmpv.so.2()(64bit)")
+            // and its own spec (linux/ink-music.spec: the menu entry kept through an upgrade), read from the resource
+            // dir Compose hands jpackage. Compose empties that dir just before it runs jpackage (and a second
+            // --resource-dir is ignored), so jpackage is run through a stand-in that puts the spec there first
+            val spec = project.file("linux/ink-music.spec")
+            val resources = layout.buildDirectory.dir("compose/tmp/resources").get().asFile
+            val real = compose.desktop.application.javaHome
+            val stand = layout.buildDirectory.dir("jpackage-rpm").get().asFile
+            doFirst {
+                javaHome.set(stand.path)   // here, as Compose sets its own after this script
+                File(stand, "bin").mkdirs()
+                File(stand, "bin/jpackage").apply {
+                    writeText("#!/bin/sh\nmkdir -p '$resources' && cp '$spec' '$resources/' && exec '$real/bin/jpackage' \"\$@\"\n")
+                    setExecutable(true)
+                }
+            }
+        }
+        TargetFormat.Deb -> freeArgs.addAll("--linux-package-deps", "libmpv2|libmpv1")   // no spaces: Compose hands jpackage its arguments unquoted
+        else -> {}
+    }
+}
+
+// Windows: ANGLE's two libraries beside skiko's own in the finished app. Compose's app sets skiko.library.path to its
+// app folder, and skiko then looks for them only there: it lays out its own library, never ANGLE's, so without these
+// ANGLE "failed to load" and skiko fell back to Direct3D (2026-11-09). The msi is made from this folder, so it has them
+val windowsAngle = System.getProperty("os.name").startsWith("Windows")
+val copyAngle by tasks.registering(Copy::class) {
+    enabled = windowsAngle
+    val jars = configurations.named("runtimeClasspath").map { c -> c.filter { it.name.startsWith("skiko-awt-runtime-angle-windows-x64") } }
+    from(jars.map { j -> j.map { zipTree(it) } }) { include("*.dll") }
+    into(layout.buildDirectory.dir("compose/binaries/main/app/Vigil/app"))
+    mustRunAfter(tasks.matching { it.name == "createDistributable" })
+}
+tasks.matching { it.name == "createDistributable" }.configureEach { finalizedBy(copyAngle) }
+
+// Windows: the msi made here rather than by Compose's packageMsi, so it carries ink's own wizard (desktop/windows/:
+// jpackage's main.wxs with ink's pictures, type and an "open ink music" at the end; the wizard's words): jpackage reads
+// those from --resource-dir, which Compose fills and empties itself. jpackage makes Compose's finished app
+// (createDistributable) into the msi, with the WiX Compose fetched; no license or folder pages (welcome, shortcuts,
+// ready, done)
+tasks.register<Exec>("packageInkMsi") {
+    dependsOn("createDistributable", copyAngle)
+    if (System.getProperty("os.name").startsWith("Windows")) dependsOn(":unzipWix")   // Compose keeps WiX on the root project
+    val app = layout.buildDirectory.dir("compose/binaries/main/app/Vigil").get().asFile
+    val out = layout.buildDirectory.dir("compose/binaries/main/msi").get().asFile
+    val res = layout.buildDirectory.dir("msi-resources").get().asFile
+    val art = project.file("windows")
+    val wix = tasks.named<AbstractJPackageTask>("packageMsi").flatMap { it.wixToolsetDir }
+    executable = File(compose.desktop.application.javaHome, "bin/jpackage").path
+    args(
+        "--type", "msi", "--app-image", app.path, "--dest", out.path,
+        "--name", "Vigil", "--app-version", project.version.toString(), "--vendor", "Vigil",
+        "--description", "Vigil, an edition of ink music", "--resource-dir", res.path,
+        // the shortcuts page: jpackage makes WiX's wizard only with one of its own pages in it (without, a bare msi
+        // with no welcome or done), and choosing the start menu and desktop is the one worth asking
+        "--win-per-user-install", "--win-menu", "--win-menu-group", "Vigil", "--win-shortcut", "--win-shortcut-prompt",
+        "--verbose",   // WiX's own messages in the log when it fails
+        "--win-upgrade-uuid", "8a2d4f16-7c3e-4e91-b5a0-2f9c6d1e8b73",
+    )
+    doFirst {
+        environment("PATH", wix.get().asFile.path + File.pathSeparator + System.getenv("PATH"))
+        out.deleteRecursively(); res.deleteRecursively(); res.mkdirs()
+        // the folder where the pictures are, written into main.wxs (WiX wants it whole)
+        for (name in listOf("main.wxs", "MsiInstallerStrings_en.wxl"))
+            File(res, name).writeText(File(art, name).readText().replace("@ART@", art.absolutePath))
+    }
+}
