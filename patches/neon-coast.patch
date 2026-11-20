@@ -28,6 +28,39 @@ index 674ba9d..82f0226 100644
      }
  
      // the key only where it's kept (Fedora); Windows' keystore.properties holds Last.fm's alone, its builds signed as debug ones
+diff --git a/app/src/full/java/app/ink/music/TubeSignIn.kt b/app/src/full/java/app/ink/music/TubeSignIn.kt
+index 236e66d..45c7e64 100644
+--- a/app/src/full/java/app/ink/music/TubeSignIn.kt
++++ b/app/src/full/java/app/ink/music/TubeSignIn.kt
+@@ -53,6 +53,8 @@ class TubeSignIn : ComponentActivity() {
+             var web by remember { mutableStateOf<WebView?>(null) }
+             var taken by remember { mutableStateOf(false) }
+             var said by remember { mutableStateOf<String?>(null) }
++            // sent on to YouTube Music once already (from YouTube itself, below)
++            var sentOn by remember { mutableStateOf(false) }
+             BackHandler { web?.takeIf { it.canGoBack() && !taken }?.goBack() ?: finish() }
+             Column(Modifier.fillMaxSize().background(Ink.black).windowInsetsPadding(WindowInsets.safeDrawing).imePadding()) {
+                 Row(Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+@@ -77,7 +79,18 @@ class TubeSignIn : ComponentActivity() {
+                             setBackgroundColor(android.graphics.Color.BLACK)
+                             webViewClient = object : WebViewClient() {
+                                 override fun onPageFinished(view: WebView, url: String) {
+-                                    if (taken || !url.startsWith(InnerTube.BASE)) return
++                                    if (taken) return
++                                    // signed in, but landed on YouTube itself, not YouTube Music: a phone's browser is
++                                    // sent to m.youtube.com and the sign-in's `next` is lost on the way, so it sat there
++                                    // waiting (2026-11-20, a main Google account). On to YouTube Music, once, where the
++                                    // session and the page's ids are taken as before
++                                    if (!url.startsWith(InnerTube.BASE)) {
++                                        val host = runCatching { android.net.Uri.parse(url).host }.getOrNull() ?: return
++                                        val onYouTube = host == "youtube.com" || host.endsWith(".youtube.com")
++                                        val session = CookieManager.getInstance().getCookie("https://www.youtube.com")?.contains("SAPISID=") == true
++                                        if (onYouTube && session && !sentOn) { sentOn = true; view.loadUrl(InnerTube.BASE) }
++                                        return
++                                    }
+                                     val cookie = CookieManager.getInstance().getCookie(InnerTube.BASE) ?: return
+                                     if ("SAPISID=" !in cookie) return
+                                     taken = true
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
 index bdad89d..49d6619 100644
 --- a/app/src/main/AndroidManifest.xml
