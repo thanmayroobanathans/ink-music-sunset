@@ -16,9 +16,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Playwright
         run: |
-          pip install playwright==1.48.0
+          pip install playwright
           python -m playwright install --with-deps chromium
       - name: Open the web player
         run: |
@@ -29,6 +32,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ls out
+          ls out || exit 0
           gh release create "probe-${{ github.run_number }}" out/*.png --draft --title "Probe: spotify, run ${{ github.run_number }}" \
             --notes "Spotify's web player as it opens, signed out" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" || true
