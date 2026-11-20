@@ -55,8 +55,13 @@ sleep 5
 if [ "${ROTATE:-}" = "1" ]; then
   adb shell wm set-ignore-orientation-request true   # what Android 16 does on big screens by itself
   adb shell settings put system accelerometer_rotation 0
-  adb shell settings put system user_rotation 1
-  adb shell wm user-rotation lock 1 > /dev/null 2>&1 || true
+  # sideways = landscape: a tablet that's landscape as it stands (the Pixel Tablet) stays at 0, a tall one turns
+  size=$(adb shell wm size | tail -1 | grep -oE '[0-9]+x[0-9]+')
+  w=${size%x*}; h=${size#*x}
+  if [ "${w:-0}" -gt "${h:-0}" ]; then turn=0; else turn=1; fi
+  echo "screen ${size}: rotation $turn"
+  adb shell settings put system user_rotation $turn
+  adb shell wm user-rotation lock $turn > /dev/null 2>&1 || true
   sleep 3
 fi
 adb shell am start -n "$PKG/app.ink.music.Main"
