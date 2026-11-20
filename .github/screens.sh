@@ -62,6 +62,10 @@ clear_pops() {
 }
 
 adb install -r -g apk/*.apk
+# the emulator's own launcher froze again and again ("isn't responding" over every screen, nothing readable under it):
+# put away for the test; the app is opened by name, and Android's fallback home stands in
+adb shell pm disable-user --user 0 com.google.android.apps.nexuslauncher > /dev/null 2>&1 || true
+adb shell settings put global anr_show_background 0 > /dev/null 2>&1 || true
 adb shell mkdir -p /sdcard/Music
 adb push music/night-drive.mp3 /sdcard/Music/night-drive.mp3
 adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Music/night-drive.mp3 > /dev/null 2>&1 || true
@@ -133,8 +137,6 @@ exportify_test() {
   adb shell appops set "$PKG" MANAGE_EXTERNAL_STORAGE default
   adb shell input keyevent KEYCODE_BACK; sleep 2; adb shell input keyevent KEYCODE_BACK; sleep 2
 }
-exportify_test || echo "exportify test stopped"
-clear_pops
 # find: a song typed, its answer photographed as it comes, and how long YouTube Music took (the app's own log)
 adb logcat -c
 if tap find; then
@@ -142,10 +144,10 @@ if tap find; then
   shot 03b-find-2s 2; shot 03c-find-6s 4
   adb logcat -d -s ink-youtube:D ink-spotify:I | tail -40 > "$OUT/find-log.txt"
   # the song kept as it plays (StreamCache): played, then played again from its start, the second read from the phone
-  if at=$(find_text "the weeknd"); then
-    x=${at% *}; y=${at#* }; y=$((y - 30))
+  if true; then
     adb logcat -c
     adb shell input keyevent KEYCODE_BACK; sleep 1   # the keyboard away
+    x=300; y=520   # the first song's row on a Pixel 7's screen, if its artist can't be read off it
     at=$(find_text "the weeknd") && { x=${at% *}; y=$(( ${at#* } - 30 )); }
     echo "play at $x $y"; adb shell input tap $x $y
     sleep 30; shot 03d-song-playing 1
@@ -156,6 +158,9 @@ if tap find; then
   fi
   adb shell input keyevent KEYCODE_BACK; sleep 1; adb shell input keyevent KEYCODE_BACK; sleep 2
 fi
+clear_pops
+exportify_test || echo "exportify test stopped"
+adb shell am start -n "$PKG/app.ink.music.Main" > /dev/null; sleep 3
 clear_pops
 # the places menu (the big words), from the place's word at the top
 clear_pops; tap "$HOME_WORD" && shot 04-places-menu 3
