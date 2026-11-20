@@ -508,7 +508,8 @@
       urls.delete(id);
     }
     tracks = recs.map((r) => {
-      if (!urls.has(r.id)) urls.set(r.id, { src: URL.createObjectURL(r.file), art: r.art ? URL.createObjectURL(r.art) : null });
+      const blob = (x, type) => (x instanceof Blob ? x : new Blob([x], { type: type || '' }));
+      if (!urls.has(r.id)) urls.set(r.id, { src: URL.createObjectURL(blob(r.file, r.type || 'audio/mpeg')), art: r.art ? URL.createObjectURL(blob(r.art, r.artType || 'image/jpeg')) : null });
       const u = urls.get(r.id);
       return { kind: 'track', key: `t:${r.id}`, id: r.id, title: r.title, by: [r.artist, r.album].filter(Boolean).join(', '), src: u.src, art: u.art };
     });
@@ -530,10 +531,18 @@
     for (const [i, file] of files.entries()) {
       toast(`adding ${i + 1} of ${files.length}…`);
       const t = await readTags(file);
+      const rec = { id: `${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`, ...t, file, added: Date.now() + i };
       try {
-        await db.put({ id: `${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`, ...t, file, added: Date.now() + i });
+        await db.put(rec);
         added++;
-      } catch { toast("this phone's storage for the app is full"); break; }
+      } catch {
+        // Safari's private windows keep no files: the song's bytes instead (read whole when the list is)
+        try {
+          await db.put({ ...rec, file: await file.arrayBuffer(), type: file.type || 'audio/mpeg',
+            art: t.art ? await t.art.arrayBuffer() : null, artType: t.art ? t.art.type : null });
+          added++;
+        } catch { toast("this phone's storage for the app is full"); break; }
+      }
     }
     if (added) toast(`${added} ${added === 1 ? 'song' : 'songs'} added`);
     showTracks();

@@ -1,7 +1,7 @@
 // Neon Coast's web app, opening without the network: its own files kept (the page, its look and code, the
 // stations, the fonts and icons). Its own files are asked for fresh first and the kept ones used when that fails, so
 // a new version shows at the next open; everything else (stations, shows, streams) goes to the network as asked.
-const KEPT = 'neon-coast-app-1';
+const KEPT = 'neon-coast-app-2';
 const OWN = ['./', 'index.html', 'app.css', 'app.js', 'stations.json', 'manifest.webmanifest',
   '../fonts/anton.woff2', '../fonts/chakra-400.woff2', '../fonts/chakra-600.woff2',
   '../img/icon.svg', '../img/icon-192.png', '../img/icon-512.png', '../img/apple-touch-icon.png'];

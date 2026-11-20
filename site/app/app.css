@@ -54,6 +54,7 @@ a { color: var(--teal); }
   padding: 10px 12px; border: 1px solid var(--line); color: var(--soft); font-size: 13px;
 }
 .hint b { color: var(--teal); font-weight: 600; }
+.hint .word { flex: none; white-space: nowrap; }
 
 main { padding: 0 var(--side); }
 .view { max-width: 40rem; }
