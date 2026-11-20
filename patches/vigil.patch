@@ -178,7 +178,7 @@ index 6396aeb..93a2427 100644
  /**
   * A song's heart, as on the desktop: 17% while not loved; loving it, red with a soft red glow for
 diff --git a/app/src/main/java/app/ink/music/Main.kt b/app/src/main/java/app/ink/music/Main.kt
-index dc12dfd..d081cc3 100644
+index dc12dfd..47ebc8e 100644
 --- a/app/src/main/java/app/ink/music/Main.kt
 +++ b/app/src/main/java/app/ink/music/Main.kt
 @@ -195,7 +195,8 @@ class Main : ComponentActivity() {
@@ -276,6 +276,15 @@ index dc12dfd..d081cc3 100644
          cover?.let { Image(it.image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
      }
  }
+@@ -3896,7 +3899,7 @@ private fun TvRail(tabs: List<String>, tab: String, onPlace: (String) -> Unit, p
+     }
+     // a little smaller, and scrolled if it must be, so settings stays above the mini player (it went under it)
+     Column(Modifier.width(TV_RAIL).fillMaxHeight().padding(bottom = foot).verticalScroll(rememberScrollState()).padding(start = 28.dp, top = 24.dp, bottom = 12.dp)) {
+-        BasicText("INK MUSIC", style = pixel(12.sp, Ink.dim), modifier = Modifier.padding(bottom = 12.dp))
++        BasicText("VIGIL", style = pixel(12.sp, Ink.dim), modifier = Modifier.padding(bottom = 12.dp))
+         tabs.forEachIndexed { i, t ->
+             var focused by remember { mutableStateOf(false) }
+             // resting on a place a moment shows it; passing through doesn't
 diff --git a/app/src/main/java/app/ink/music/Pieces.kt b/app/src/main/java/app/ink/music/Pieces.kt
 index 7c014dc..5bce461 100644
 --- a/app/src/main/java/app/ink/music/Pieces.kt
@@ -318,9 +327,18 @@ index da0fc19..e2df889 100644
          }
          // the song's spotify canvas in its place, moving, in the same look (signed in to spotify: settings, the look)
 diff --git a/app/src/main/java/app/ink/music/Settings.kt b/app/src/main/java/app/ink/music/Settings.kt
-index 88425c2..4ef7e13 100644
+index 88425c2..287a35d 100644
 --- a/app/src/main/java/app/ink/music/Settings.kt
 +++ b/app/src/main/java/app/ink/music/Settings.kt
+@@ -87,7 +87,7 @@ private val COG = listOf(
+ @Composable
+ fun SettingsPage(pages: Pages, part: String? = null) {
+     val ctx = LocalContext.current
+-    val title = when (part) { "music" -> "YOUR MUSIC"; "sound" -> "SOUND"; "offline" -> "OFFLINE"; "listening" -> "LISTENING"; "about" -> "ABOUT"; else -> "INK MUSIC" }
++    val title = when (part) { "music" -> "YOUR MUSIC"; "sound" -> "SOUND"; "offline" -> "OFFLINE"; "listening" -> "LISTENING"; "about" -> "ABOUT"; else -> "HIDEOUT" }
+     val account by Server.account.collectAsState()
+     val count by Server.count.collectAsState()
+     val syncing by Server.syncing.collectAsState()
 @@ -816,9 +816,9 @@ fun TvSettingsPage(pages: Pages) {
      ) {
          item {
@@ -585,6 +603,19 @@ index bd0210e..2485d8d 100644
              Spacer(Modifier.height(30.dp))
              Word("BEGIN", headline(56.sp), touch = 12.dp, onClick = onNext)
          }
+diff --git a/app/src/main/java/app/ink/music/Widget.kt b/app/src/main/java/app/ink/music/Widget.kt
+index 68e0d6d..ce32421 100644
+--- a/app/src/main/java/app/ink/music/Widget.kt
++++ b/app/src/main/java/app/ink/music/Widget.kt
+@@ -40,7 +40,7 @@ class Widget : AppWidgetProvider() {
+             val id = p.getString("id", null)
+             val v = RemoteViews(c.packageName, R.layout.widget)
+             if (id == null) {
+-                v.setTextViewText(R.id.title, "INK MUSIC")
++                v.setTextViewText(R.id.title, "VIGIL")
+                 v.setTextViewText(R.id.artist, "play something")
+                 v.setImageViewResource(R.id.cover, android.R.color.black)
+             } else {
 diff --git a/app/src/main/res/drawable/icon_sky.xml b/app/src/main/res/drawable/icon_sky.xml
 new file mode 100644
 index 0000000..1339078

@@ -3899,7 +3899,7 @@ private fun TvRail(tabs: List<String>, tab: String, onPlace: (String) -> Unit, p
     }
     // a little smaller, and scrolled if it must be, so settings stays above the mini player (it went under it)
     Column(Modifier.width(TV_RAIL).fillMaxHeight().padding(bottom = foot).verticalScroll(rememberScrollState()).padding(start = 28.dp, top = 24.dp, bottom = 12.dp)) {
-        BasicText("INK MUSIC", style = pixel(12.sp, Ink.dim), modifier = Modifier.padding(bottom = 12.dp))
+        BasicText("NEON COAST", style = pixel(12.sp, Ink.dim), modifier = Modifier.padding(bottom = 12.dp))
         tabs.forEachIndexed { i, t ->
             var focused by remember { mutableStateOf(false) }
             // resting on a place a moment shows it; passing through doesn't

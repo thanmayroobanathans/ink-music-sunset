@@ -87,7 +87,7 @@ private val COG = listOf(
 @Composable
 fun SettingsPage(pages: Pages, part: String? = null) {
     val ctx = LocalContext.current
-    val title = when (part) { "music" -> "YOUR MUSIC"; "sound" -> "SOUND"; "offline" -> "OFFLINE"; "listening" -> "LISTENING"; "about" -> "ABOUT"; else -> "INK MUSIC" }
+    val title = when (part) { "music" -> "YOUR MUSIC"; "sound" -> "SOUND"; "offline" -> "OFFLINE"; "listening" -> "LISTENING"; "about" -> "ABOUT"; else -> "SAFEHOUSE" }
     val account by Server.account.collectAsState()
     val count by Server.count.collectAsState()
     val syncing by Server.syncing.collectAsState()
