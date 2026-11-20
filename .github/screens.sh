@@ -43,6 +43,15 @@ sys.exit(1)
 PY
 }
 tap() { local at; at=$(find_text "$@") || { echo "not on screen: $*"; return 1; }; echo "tap $1 at $at"; adb shell input tap $at; }
+# the emulator's own pop-ups over the app (a launcher not responding, the taskbar's tip): out of the way first
+clear_pops() {
+  local i
+  for i in 1 2 3; do
+    find_text "isn't responding" "Got it" > /dev/null || return 0
+    tap Wait "Got it" || adb shell input keyevent KEYCODE_BACK
+    sleep 2
+  done
+}
 
 adb install -r -g apk/*.apk
 adb shell mkdir -p /sdcard/Music
@@ -68,20 +77,22 @@ adb shell am start -n "$PKG/app.ink.music.Main"
 shot 01-welcome 10
 # the welcome, step by step, till the places are there
 for i in $(seq 1 10); do
+  clear_pops
   if find_text "$HOME_WORD" > /dev/null; then break; fi
   tap BEGIN NEXT skip DONE Allow "While using the app" || adb shell input keyevent KEYCODE_BACK
   shot "02-welcome-step$i" 4
 done
 shot 03-home 8
+clear_pops
 # the places menu (the big words), from the place's word at the top
-tap "$HOME_WORD" && shot 04-places-menu 3
+clear_pops; tap "$HOME_WORD" && shot 04-places-menu 3
 tap tracks && shot 05-tracks 5
-tap "night drive" && shot 06-playing 5
+clear_pops; tap "night drive" && shot 06-playing 5
 # the player: from the mini player, the lowest "night drive" on screen
-PICK=last tap "night drive" && shot 07-player 6
+clear_pops; PICK=last tap "night drive" && shot 07-player 6
 adb shell input swipe 160 480 160 160 300 && shot 08-player-more 3
 adb shell input keyevent KEYCODE_BACK; sleep 3
-shot 09-back 1
+clear_pops; shot 09-back 1
 # settings: the place's word at the top opens the menu; settings is at its foot
 tap tracks "$HOME_WORD" && shot 10-menu-again 3
 tap "$SETTINGS_WORD" && shot 11-settings 5
