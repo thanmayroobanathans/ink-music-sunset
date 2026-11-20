@@ -92,6 +92,15 @@ for i in $(seq 1 10); do
 done
 shot 03-home 8
 clear_pops
+# find: a song typed, its answer photographed as it comes, and how long YouTube Music took (the app's own log)
+adb logcat -c
+if tap find; then
+  sleep 2; adb shell input text "blinding%slights"
+  shot 03b-find-2s 2; shot 03c-find-6s 4
+  adb logcat -d -s ink-youtube:D ink-spotify:I | tail -40 > "$OUT/find-log.txt"
+  adb shell input keyevent KEYCODE_BACK; sleep 1; adb shell input keyevent KEYCODE_BACK; sleep 2
+fi
+clear_pops
 # the places menu (the big words), from the place's word at the top
 clear_pops; tap "$HOME_WORD" && shot 04-places-menu 3
 tap tracks && shot 05-tracks 5

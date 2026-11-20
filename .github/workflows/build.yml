@@ -245,6 +245,6 @@ jobs:
         run: |
           find shots -name '*.png' -size 0 -delete 2>/dev/null || true
           ls shots/*.png > /dev/null 2>&1 || { echo "no screenshots"; exit 0; }
-          gh release create "screens-${SHOTS}-build${GITHUB_RUN_NUMBER}" shots/*.png --draft \
+          gh release create "screens-${SHOTS}-build${GITHUB_RUN_NUMBER}" shots/* --draft \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Screens: ${SHOTS}, build ${GITHUB_RUN_NUMBER}" --notes "The built app on an emulator."

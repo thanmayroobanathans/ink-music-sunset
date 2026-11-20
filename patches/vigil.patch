@@ -28,6 +28,110 @@ index 674ba9d..a36cebb 100644
      }
  
      // the key only where it's kept (Fedora); Windows' keystore.properties holds Last.fm's alone, its builds signed as debug ones
+diff --git a/app/src/full/java/app/ink/music/SpotifySignIn.kt b/app/src/full/java/app/ink/music/SpotifySignIn.kt
+index c0ceeab..1a4eba0 100644
+--- a/app/src/full/java/app/ink/music/SpotifySignIn.kt
++++ b/app/src/full/java/app/ink/music/SpotifySignIn.kt
+@@ -230,6 +230,23 @@ object Spotify {
+         return url
+     }
+ 
++    /**
++     * Spotify's songs for these words (find's "on spotify", signed in; the editions', 2026-11-20): its search forgives a
++     * title misspelled or half remembered. Shown as songs; each is played from YouTube Music once tapped.
++     */
++    suspend fun search(c: Context, q: String): List<Song> {
++        if (q.isBlank() || !signedIn() || !fresh(c)) return emptyList()
++        val hits = withContext(Dispatchers.IO) {
++            runCatching { SpotifyCanvas.search(q, pass() ?: error("not signed in")) }
++                .onFailure { android.util.Log.w("ink-spotify", "search: $it") }.getOrDefault(emptyList())
++        }
++        return hits.map { h ->
++            val id = "sp" + h.uri.substringAfterLast(':')
++            Song(id = id, uri = android.net.Uri.parse(h.uri), title = h.title, artist = h.artist, album = h.album, albumId = id,
++                albumArtist = h.artist, duration = 0L, disc = 1, track = 0, year = 0, art = h.art, format = "spotify")
++        }
++    }
++
+     /** Your playlists, Liked Songs first; null when Spotify wouldn't say (signed out, or its queries changed). */
+     suspend fun playlists(): List<Import.Theirs>? = withContext(Dispatchers.IO) {
+         runCatching {
+diff --git a/app/src/full/java/app/ink/music/SpotifySync.kt b/app/src/full/java/app/ink/music/SpotifySync.kt
+new file mode 100644
+index 0000000..6c298e4
+--- /dev/null
++++ b/app/src/full/java/app/ink/music/SpotifySync.kt
+@@ -0,0 +1,70 @@
++package app.ink.music
++
++import android.content.Context
++import org.json.JSONArray
++import org.json.JSONObject
++import java.io.File
++
++/**
++ * A Spotify playlist brought in and made on YouTube Music, kept in step (the editions', 2026-11-20): what's added to it
++ * on Spotify is found and added there too, as the app opens (an hour apart at least). Nothing is taken out: a song gone
++ * from Spotify stays on YouTube Music, yours to take out.
++ */
++object SpotifySync {
++    private data class Kept(val spotify: String, val name: String, val tube: String, val known: Set<String>)
++    private const val GAP = 60 * 60_000L
++    @Volatile private var running = false
++
++    private fun file(c: Context) = File(c.filesDir, "spotify-sync.json")
++
++    private fun load(c: Context): List<Kept> = runCatching {
++        val a = JSONArray(file(c).readText())
++        (0 until a.length()).map { i ->
++            val o = a.getJSONObject(i)
++            val k = o.optJSONArray("known") ?: JSONArray()
++            Kept(o.getString("spotify"), o.optString("name"), o.getString("tube"), (0 until k.length()).map { k.getString(it) }.toSet())
++        }
++    }.getOrDefault(emptyList())
++
++    private fun save(c: Context, all: List<Kept>) {
++        val a = JSONArray()
++        all.forEach { k -> a.put(JSONObject().put("spotify", k.spotify).put("name", k.name).put("tube", k.tube).put("known", JSONArray(k.known.toList()))) }
++        runCatching { file(c).writeText(a.toString()) }
++    }
++
++    /** How many playlists are kept in step. */
++    fun count(c: Context): Int = load(c).size
++
++    /** This playlist from Spotify ([spotify] its id), made on YouTube Music as [tube], kept in step; [songs] what it had. */
++    fun keep(c: Context, spotify: String, name: String, tube: TubeList, songs: List<Import.Said>) {
++        save(c, load(c).filterNot { it.spotify == spotify } + Kept(spotify, name, tube.id, songs.map { Radio.key(it.title, it.artist) }.toSet()))
++    }
++
++    /** Each kept playlist read again from Spotify, and what's new there found and added on YouTube Music. */
++    suspend fun run(c: Context, force: Boolean = false) {
++        if (running) return
++        val stamp = File(c.filesDir, "spotify-sync-at")
++        if (!force && System.currentTimeMillis() - stamp.lastModified() < GAP) return
++        val all = load(c).ifEmpty { return }
++        if (!Spotify.signedIn() || YouTubeAccount.who.value == null) return
++        running = true
++        try {
++            if (!Spotify.fresh(c)) return
++            val out = all.map { k ->
++                val now = Spotify.songs(k.spotify) ?: return@map k
++                val new = now.filter { Radio.key(it.title, it.artist) !in k.known }
++                if (new.isEmpty()) return@map k
++                val found = Import.match(new).filterNotNull()
++                val list = TubeList(k.tube, k.name, "", null)
++                var added = 0
++                found.forEach { s -> if (YouTubeAccount.addTo(list, s)) added++ }
++                android.util.Log.i("ink-spotify", "kept in step, ${k.name}: ${new.size} new on spotify, $added added on youtube music")
++                k.copy(known = k.known + new.map { Radio.key(it.title, it.artist) })
++            }
++            save(c, out)
++            runCatching { stamp.writeText(System.currentTimeMillis().toString()) }
++        } finally {
++            running = false
++        }
++    }
++}
 diff --git a/app/src/full/java/app/ink/music/TubeSignIn.kt b/app/src/full/java/app/ink/music/TubeSignIn.kt
 index 236e66d..45c7e64 100644
 --- a/app/src/full/java/app/ink/music/TubeSignIn.kt
@@ -61,6 +165,100 @@ index 236e66d..45c7e64 100644
                                      val cookie = CookieManager.getInstance().getCookie(InnerTube.BASE) ?: return
                                      if ("SAPISID=" !in cookie) return
                                      taken = true
+diff --git a/app/src/full/java/app/ink/music/YouTubeMusic.kt b/app/src/full/java/app/ink/music/YouTubeMusic.kt
+index 10e2758..ef7a9fe 100644
+--- a/app/src/full/java/app/ink/music/YouTubeMusic.kt
++++ b/app/src/full/java/app/ink/music/YouTubeMusic.kt
+@@ -49,41 +49,58 @@ object YouTubeMusic {
+     fun known(id: String): Song? = known[id]
+     fun remember(s: Song) { known[s.id] = s }
+ 
++    /**
++     * YouTube Music's songs by these words. Where NewPipe's search gives none (it fails now and then as YouTube changes,
++     * and find said nothing at all), YouTube Music's own search, asked straight (the editions', 2026-11-20).
++     */
++    suspend fun songs(q: String): List<Song> = withContext(Dispatchers.IO) {
++        init()
++        runCatching {
++            SearchInfo.getInfo(yt, yt.searchQHFactory.fromQuery(q, listOf(YoutubeSearchQueryHandlerFactory.MUSIC_SONGS), "")).relatedItems
++                .filterIsInstance<StreamInfoItem>().map { song(it) }
++        }.onFailure { android.util.Log.d("ink-youtube", "songs \"$q\": $it") }.getOrNull()?.takeIf { it.isNotEmpty() }
++            ?: runCatching { InnerTube().searchSongs(q, 20).map { trackSong(it) } }
++                .onFailure { android.util.Log.d("ink-youtube", "songs \"$q\", asked straight: $it") }.getOrDefault(emptyList())
++    }
++
++    /** YouTube Music's records by these words. */
++    suspend fun albums(q: String): List<TubeAlbum> = withContext(Dispatchers.IO) {
++        init()
++        runCatching {
++            SearchInfo.getInfo(yt, yt.searchQHFactory.fromQuery(q, listOf(YoutubeSearchQueryHandlerFactory.MUSIC_ALBUMS), "")).relatedItems
++                .filterIsInstance<PlaylistInfoItem>().map { TubeAlbum(it.url, it.name, it.uploaderName.orEmpty(), Pipe.best(it.thumbnails)) }
++        }.getOrDefault(emptyList())
++    }
++
++    /** YouTube Music's artists by these words (their faces and pages). */
++    suspend fun artists(q: String): List<TubeArtist> = withContext(Dispatchers.IO) {
++        init()
++        runCatching {
++            SearchInfo.getInfo(yt, yt.searchQHFactory.fromQuery(q, listOf(YoutubeSearchQueryHandlerFactory.MUSIC_ARTISTS), "")).relatedItems
++                .filterIsInstance<org.schabi.newpipe.extractor.channel.ChannelInfoItem>().map {
++                    TubeArtist(it.name, Pipe.best(it.thumbnails), Regex("/channel/(UC[A-Za-z0-9_-]+)").find(it.url)?.groupValues?.get(1).orEmpty())
++                }
++        }.getOrDefault(emptyList())
++    }
++
++    /** YouTube Music's playlists by these words. */
++    suspend fun playlists(q: String): List<TubeAlbum> = withContext(Dispatchers.IO) {
++        init()
++        runCatching {
++            SearchInfo.getInfo(yt, yt.searchQHFactory.fromQuery(q, listOf(YoutubeSearchQueryHandlerFactory.MUSIC_PLAYLISTS), "")).relatedItems
++                .filterIsInstance<PlaylistInfoItem>().map { TubeAlbum(it.url, it.name, it.uploaderName.orEmpty(), Pipe.best(it.thumbnails)) }
++        }.getOrDefault(emptyList())
++    }
++
+     /** Songs and records by these words, and for find (`all`) artists and playlists too, all asked at once. */
+     suspend fun search(q: String, all: Boolean = false): TubeFound = withContext(Dispatchers.IO) {
+-        init()
+         val t0 = System.currentTimeMillis()
+-        val f = yt.searchQHFactory
+-        val songs = async {
+-            runCatching {
+-                SearchInfo.getInfo(yt, f.fromQuery(q, listOf(YoutubeSearchQueryHandlerFactory.MUSIC_SONGS), "")).relatedItems
+-                    .filterIsInstance<StreamInfoItem>().map { song(it) }
+-            }.getOrDefault(emptyList())
+-        }
+-        val albums = async {
+-            runCatching {
+-                SearchInfo.getInfo(yt, f.fromQuery(q, listOf(YoutubeSearchQueryHandlerFactory.MUSIC_ALBUMS), "")).relatedItems
+-                    .filterIsInstance<PlaylistInfoItem>().map { TubeAlbum(it.url, it.name, it.uploaderName.orEmpty(), Pipe.best(it.thumbnails)) }
+-            }.getOrDefault(emptyList())
+-        }
++        val foundSongs = async { songs(q) }
++        val foundAlbums = async { albums(q) }
+         // and for find, who (artists, their faces and pages) and playlists by those words
+-        val artists = async {
+-            if (!all) return@async emptyList()
+-            runCatching {
+-                SearchInfo.getInfo(yt, f.fromQuery(q, listOf(YoutubeSearchQueryHandlerFactory.MUSIC_ARTISTS), "")).relatedItems
+-                    .filterIsInstance<org.schabi.newpipe.extractor.channel.ChannelInfoItem>().map {
+-                        TubeArtist(it.name, Pipe.best(it.thumbnails), Regex("/channel/(UC[A-Za-z0-9_-]+)").find(it.url)?.groupValues?.get(1).orEmpty())
+-                    }
+-            }.getOrDefault(emptyList())
+-        }
+-        val lists = async {
+-            if (!all) return@async emptyList()
+-            runCatching {
+-                SearchInfo.getInfo(yt, f.fromQuery(q, listOf(YoutubeSearchQueryHandlerFactory.MUSIC_PLAYLISTS), "")).relatedItems
+-                    .filterIsInstance<PlaylistInfoItem>().map { TubeAlbum(it.url, it.name, it.uploaderName.orEmpty(), Pipe.best(it.thumbnails)) }
+-            }.getOrDefault(emptyList())
+-        }
+-        TubeFound(songs.await().take(20), albums.await().take(12), artists.await().take(8), lists.await().take(12))
++        val foundArtists = async { if (all) artists(q) else emptyList() }
++        val foundLists = async { if (all) playlists(q) else emptyList() }
++        TubeFound(foundSongs.await().take(20), foundAlbums.await().take(12), foundArtists.await().take(8), foundLists.await().take(12))
+             .also { android.util.Log.d("ink-youtube", "search \"$q\": ${it.songs.size} songs, ${it.albums.size} records, ${it.artists.size} artists, ${it.lists.size} playlists in ${System.currentTimeMillis() - t0} ms") }
+     }
+ 
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
 index bdad89d..9827e0a 100644
 --- a/app/src/main/AndroidManifest.xml
@@ -211,7 +409,7 @@ index 6396aeb..93a2427 100644
  /**
   * A song's heart, as on the desktop: 17% while not loved; loving it, red with a soft red glow for
 diff --git a/app/src/main/java/app/ink/music/Main.kt b/app/src/main/java/app/ink/music/Main.kt
-index dc12dfd..3dc8daa 100644
+index dc12dfd..56b524b 100644
 --- a/app/src/main/java/app/ink/music/Main.kt
 +++ b/app/src/main/java/app/ink/music/Main.kt
 @@ -195,7 +195,8 @@ class Main : ComponentActivity() {
@@ -224,7 +422,16 @@ index dc12dfd..3dc8daa 100644
          // the next song's cover (and the last's) ready before it plays (Covers.ahead)
          lifecycleScope.launch { Covers.ahead(this@Main) }
          // the genres opened most, their editors' songs read ahead (their pages open with them there)
-@@ -894,7 +895,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -376,6 +377,8 @@ private fun App() {
+     var allowed by remember { mutableStateOf(Library.allowed(ctx)) }
+     val welcomed by Seeds.welcomed.collectAsState()
+     LaunchedEffect(allowed) { if (allowed) Library.start(ctx) }
++    // Spotify playlists kept in step (the editions'): what's been added there, added on YouTube Music
++    LaunchedEffect(Unit) { kotlinx.coroutines.delay(20_000); runCatching { SpotifySync.run(ctx) } }
+     // what plays found in the library once it's read (its cover, its record)
+     val library by Library.songs.collectAsState()
+     LaunchedEffect(library) { Playback.refresh() }
+@@ -894,7 +897,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
                  verticalAlignment = Alignment.CenterVertically) {
                  androidx.compose.animation.AnimatedContent(tab, label = "place",
                      transitionSpec = { androidx.compose.animation.fadeIn(tween(Motion.ENTER, easing = Motion.expo)) togetherWith androidx.compose.animation.fadeOut(tween(Motion.EXIT)) },
@@ -233,7 +440,7 @@ index dc12dfd..3dc8daa 100644
                  Spacer(Modifier.width(10.dp))
                  // the menu's chevron: down while shut, up while open
                  val turn by androidx.compose.animation.core.animateFloatAsState(if (menu) 180f else 0f, tween(Motion.ENTER, easing = Motion.expo), label = "chevron")
-@@ -922,7 +923,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -922,7 +925,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
              }
              when (key) {
                  Hints.PULL -> Typed("pull down to find anything", pixel(12.sp, Ink.mid), hint)
@@ -242,7 +449,7 @@ index dc12dfd..3dc8daa 100644
                  Hints.ACROSS -> Typed("swipe across for the place beside", pixel(12.sp, Ink.mid), hint)
                  Hints.TURN -> Typed("turn your phone sideways for a wall of covers", pixel(12.sp, Ink.mid), hint)
                  Hints.ORDER -> Typed("tap an order to change it: year, color, lately", pixel(12.sp, Ink.mid), hint)
-@@ -934,6 +935,8 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -934,6 +937,8 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
              }
          }
        }
@@ -251,7 +458,7 @@ index dc12dfd..3dc8daa 100644
        Box(Modifier.fillMaxWidth().height(BAND).softEdge(tabsFrost, towardBottom = false))
      }
      // the places, dropped down under the word: big, the one you're on lit, each arriving in turn; a tap goes there (on
-@@ -954,14 +957,14 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -954,14 +959,14 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
          ) {
              tabs.forEachIndexed { i, t ->
                  // a TV's screen is short: the places a size smaller, so all of them and settings sit above the mini player
@@ -268,7 +475,7 @@ index dc12dfd..3dc8daa 100644
              Word("your year", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size + 1, menu), touch = 8.dp) { menu = false; pages.open(Page.Year) }
              Word("ink mapped", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size + 2, menu), touch = 8.dp) { menu = false; pages.open(Page.Mapped) }
              // pairing a computer a tap from anywhere, not deep in settings; once one's paired, its name opens its setting
-@@ -1002,9 +1005,16 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -1002,9 +1007,16 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
      }
  }
  
@@ -287,7 +494,25 @@ index dc12dfd..3dc8daa 100644
  
  /**
   * The pager's fling, but none when it's still and on its page. A row of covers flung to its end hands the
-@@ -1671,7 +1681,7 @@ private fun ArtistPage(name: String, pages: Pages, tubeId: String = "") {
+@@ -1458,7 +1470,7 @@ private fun LovedPage(pages: Pages) {
+  * once (a second tap made a second playlist), then "open it".
+  */
+ @Composable
+-internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
++internal fun KeepIt(name: String, found: List<Song>, pages: Pages, onTube: ((app.ink.music.TubeList) -> Unit)? = null) {
+     val scope = rememberCoroutineScope()
+     // where it's being made ("youtube", "server"), and once made, the page that opens it
+     var making by remember(name, found) { mutableStateOf<String?>(null) }
+@@ -1487,7 +1499,7 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
+         }
+     }
+     if (who != null) Place("youtube", "youtube music") {
+-        YouTubeAccount.makePlaylistOf(name, found)?.let { (list, n) -> said = "$n songs on youtube music"; true to Page.TubeList(list) }
++        YouTubeAccount.makePlaylistOf(name, found)?.let { (list, n) -> said = "$n songs on youtube music"; onTube?.invoke(list); true to Page.TubeList(list) }
+             ?: run { said = "youtube music didn't take it"; false to null }
+     }
+     if (account != null) Place("server", "your server") {
+@@ -1671,7 +1683,7 @@ private fun ArtistPage(name: String, pages: Pages, tubeId: String = "") {
                      // as it is (or in the grain), a light photo held down so the name on it reads (nameDim)
                      if (!dithered && !xray && c != null) {
                          val dim = remember(c) { nameDim(c.image) }
@@ -296,7 +521,48 @@ index dc12dfd..3dc8daa 100644
                      }
                  }
                  else Box(Modifier.size(side).align(Alignment.Center))
-@@ -2296,7 +2306,7 @@ fun Dithered(photo: Song, modifier: Modifier, px: Int = 1080, print: Print = Pri
+@@ -2108,6 +2120,8 @@ private fun ImportPage(pages: Pages) {
+     var theirs by remember { mutableStateOf<List<Import.Theirs>?>(null) }
+     var wanted by remember { mutableStateOf<Import.Theirs?>(null) }
+     var reading by remember { mutableStateOf<Int?>(null) }
++    // the Spotify playlist it came from (none for a file): made on YouTube Music, it's kept in step ([SpotifySync])
++    var fromSpotify by remember { mutableStateOf<String?>(null) }
+     LaunchedEffect(spotifyAt) {
+         if (!Spotify.ready()) return@LaunchedEffect
+         if (theirs == null) theirs = Spotify.playlists() ?: run { said = "spotify didn't say. sign in again"; null }
+@@ -2115,7 +2129,7 @@ private fun ImportPage(pages: Pages) {
+             reading = 0
+             val songs = Spotify.songs(w.id) { reading = it }
+             reading = null; wanted = null
+-            if (songs.isNullOrEmpty()) said = "spotify didn't give that one's songs" else { chosen = Import.Listed(w.name, songs); lists = null }
++            if (songs.isNullOrEmpty()) said = "spotify didn't give that one's songs" else { chosen = Import.Listed(w.name, songs); lists = null; fromSpotify = w.id }
+         }
+     }
+     fun open(w: Import.Theirs) {
+@@ -2125,7 +2139,7 @@ private fun ImportPage(pages: Pages) {
+             reading = 0
+             val songs = Spotify.songs(w.id) { reading = it }
+             reading = null; wanted = null
+-            if (songs.isNullOrEmpty()) said = "spotify didn't give that one's songs" else { chosen = Import.Listed(w.name, songs); lists = null }
++            if (songs.isNullOrEmpty()) said = "spotify didn't give that one's songs" else { chosen = Import.Listed(w.name, songs); lists = null; fromSpotify = w.id }
+         } else Spotify.signIn(ctx)
+     }
+     LaunchedEffect(chosen) {
+@@ -2192,7 +2206,12 @@ private fun ImportPage(pages: Pages) {
+                     BasicText("${found.size} of ${c.songs.size} found   ${found.count { !it.tube }} yours", style = pixel(12.sp, Ink.mid))
+                     Spacer(Modifier.height(16.dp))
+                     Word("play it", pixel(14.sp), touch = 8.dp) { Playback.play(found, 0) }
+-                    KeepIt(c.name, found, pages)
++                    val spotifyId = fromSpotify
++                    KeepIt(c.name, found, pages, onTube = spotifyId?.let { id -> { list: app.ink.music.TubeList -> SpotifySync.keep(ctx, id, c.name, list, c.songs) } })
++                    if (spotifyId != null && YouTubeAccount.who.collectAsState().value != null) {
++                        Spacer(Modifier.height(8.dp))
++                        BasicText("made on youtube music, it's kept in step with spotify: songs added there are added here too", style = pixel(12.sp, Ink.mid))
++                    }
+                     said?.let { Spacer(Modifier.height(10.dp)); BasicText(it, style = pixel(12.sp, Ink.mid)) }
+                     Spacer(Modifier.height(14.dp))
+                 }
+@@ -2296,7 +2315,7 @@ fun Dithered(photo: Song, modifier: Modifier, px: Int = 1080, print: Print = Pri
      if (print == Print.CLEAR) return AsItIs(photo, modifier, px)
      val cover = rememberCover(photo, px)
      val density = LocalDensity.current
@@ -305,7 +571,7 @@ index dc12dfd..3dc8daa 100644
          val side = with(density) { maxWidth.toPx() }
          val frames by androidx.compose.runtime.produceState<List<androidx.compose.ui.graphics.ImageBitmap>?>(null, cover, print) {
              val c = cover ?: return@produceState
-@@ -2344,11 +2354,11 @@ private fun Xrayed(photo: Song, modifier: Modifier, px: Int = 1080) {
+@@ -2344,11 +2363,11 @@ private fun Xrayed(photo: Song, modifier: Modifier, px: Int = 1080) {
      LaunchedEffect(pic) {
          if (pic != null) { if (Moves.less.value) shown.snapTo(1f) else shown.animateTo(1f, tween(600, easing = Motion.expo)) }
      }
@@ -319,7 +585,7 @@ index dc12dfd..3dc8daa 100644
          }
      }
  }
-@@ -2375,7 +2385,7 @@ fun ArtistPhoto(photo: Song, modifier: Modifier) {
+@@ -2375,7 +2394,7 @@ fun ArtistPhoto(photo: Song, modifier: Modifier) {
  @Composable
  private fun AsItIs(photo: Song, modifier: Modifier, px: Int = 1080) {
      val cover = rememberCover(photo, px)
@@ -328,7 +594,136 @@ index dc12dfd..3dc8daa 100644
          cover?.let { Image(it.image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
      }
  }
-@@ -3896,7 +3906,7 @@ private fun TvRail(tabs: List<String>, tab: String, onPlace: (String) -> Unit, p
+@@ -2419,19 +2438,43 @@ private object Searches {
+ 
+ /**
+  * YouTube Music's answer to what's typed, and to its words alone where it has symbols (YouTube can answer a title's
+- * symbols with nothing: "ピーナツ ⧸ 可不"), together; best answers first (the computer's).
++ * symbols with nothing: "ピーナツ ⧸ 可不"), together; best answers first (the computer's). Each part told ([part]) as it
++ * comes, songs and records not held for its artists and playlists (the editions', 2026-11-20: find lagged on the slowest).
+  */
+-private suspend fun tubeFound(text: String): TubeFound = kotlinx.coroutines.coroutineScope {
++private suspend fun tubeFound(text: String, part: (TubeFound) -> Unit = {}): TubeFound = kotlinx.coroutines.coroutineScope {
+     val plain = Search.plain(text).takeIf { it != text && Search.enough(it) }
+-    val asked = async { YouTubeMusic.search(text, all = true) }
+-    val also = plain?.let { async { YouTubeMusic.search(it, all = true) } }
+-    val a = asked.await(); val b = also?.await() ?: TubeFound()
+-    TubeFound(
+-        Search.best(text, (a.songs + b.songs).distinctBy { it.id }, { it.title }, { it.artist }).take(20),
+-        Search.best(text, (a.albums + b.albums).distinctBy { it.url }, { it.title }, { it.artist }).take(12),
+-        (a.artists + b.artists).distinctBy { it.name.lowercase() }.take(8),
+-        (a.lists + b.lists).distinctBy { it.url }.take(12),
++    val asked = listOfNotNull(text, plain)
++    // gathered on this (the screen's) thread: each part's answer added as it comes, nothing shared between threads
++    var songs = emptyList<Song>(); var albums = emptyList<TubeAlbum>(); var artists = emptyList<TubeArtist>(); var lists = emptyList<TubeAlbum>()
++    fun now() = TubeFound(
++        Search.best(text, songs.distinctBy { it.id }, { it.title }, { it.artist }).take(20),
++        Search.best(text, albums.distinctBy { it.url }, { it.title }, { it.artist }).take(12),
++        artists.distinctBy { it.name.lowercase() }.take(8),
++        lists.distinctBy { it.url }.take(12),
+     )
++    asked.flatMap { q -> listOf(
++        launch { songs = songs + YouTubeMusic.songs(q); part(now()) },
++        launch { albums = albums + YouTubeMusic.albums(q); part(now()) },
++        launch { artists = artists + YouTubeMusic.artists(q); part(now()) },
++        launch { lists = lists + YouTubeMusic.playlists(q); part(now()) },
++    ) }.forEach { it.join() }
++    now()
++}
++
++/** What find was answered lately (the editions'): the same words again (a letter taken back, typed again) at once. */
++private object Answers {
++    private const val MOST = 40
++    private val tube = object : LinkedHashMap<String, TubeFound>(MOST, .75f, true) {
++        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TubeFound>?) = size > MOST
++    }
++    private val videos = object : LinkedHashMap<String, List<Song>>(MOST, .75f, true) {
++        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Song>>?) = size > MOST
++    }
++    fun tube(q: String): TubeFound? = tube[q]
++    // an answer kept only if it found something: nothing found is asked again next time
++    fun keep(q: String, f: TubeFound) { if (f.songs.isNotEmpty() || f.albums.isNotEmpty()) tube[q] = f }
++    fun videos(q: String): List<Song>? = videos[q]
++    fun keep(q: String, v: List<Song>) { if (v.isNotEmpty()) videos[q] = v }
+ }
+ 
+ /** youtube.com's videos for what's typed and its words alone, together, best answers first. */
+@@ -2494,10 +2537,22 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+         seen[0] = forced
+         value = online to forced
+     }
+-    // YouTube Music too (the full build): what's typed and its words alone, best answers first
++    // YouTube Music too (the full build): what's typed and its words alone, best answers first, each part shown as it
++    // comes; the same words answered lately, at once
+     val tubeAll by androidx.compose.runtime.produceState(TubeFound(), ask) {
+         val text = ask?.first
+-        value = if (!YouTubeMusic.available || text == null) TubeFound() else tubeFound(text)
++        if (!YouTubeMusic.available || text == null) { value = TubeFound(); return@produceState }
++        Answers.tube(text)?.let { value = it; return@produceState }
++        value = TubeFound()
++        value = tubeFound(text) { value = it }.also { Answers.keep(text, it) }
++    }
++    // Spotify's own search too, signed in to it (the editions'): it finds what's misspelled or half remembered; each
++    // played from YouTube Music once tapped
++    val spotifyAll by androidx.compose.runtime.produceState(emptyList<Song>(), ask) {
++        val text = ask?.first
++        value = emptyList()
++        if (text == null || !Spotify.available || !Spotify.signedIn()) return@produceState
++        value = Spotify.search(ctx, text)
+     }
+     // radio's stations by that name (ink radio's own first)
+     val stations by androidx.compose.runtime.produceState(emptyList<Song>(), ask) {
+@@ -2506,7 +2561,10 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+     // youtube.com's own videos (the full build): songs never put on YouTube Music, apart from its songs; none it already gave
+     val videosAll by androidx.compose.runtime.produceState(emptyList<Song>(), ask) {
+         val text = ask?.first
+-        value = if (!YouTubeMusic.available || text == null) emptyList() else tubeVideos(text)
++        if (!YouTubeMusic.available || text == null) { value = emptyList(); return@produceState }
++        Answers.videos(text)?.let { value = it; return@produceState }
++        value = emptyList()
++        value = tubeVideos(text).also { Answers.keep(text, it) }
+     }
+     // a YouTube video's id in what's typed ("[VDvX1hzGZN4]", as a file downloaded from YouTube is often named): that video
+     val tubeId = if (pasted || !YouTubeMusic.available) null else Search.tubeId(raw)
+@@ -2517,6 +2575,26 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+     // a stream's own link pasted (not a service's): a station
+     val streamed = remember(raw) { if (!pasted && RadioBrowser.isStream(raw)) Stations.of(RadioBrowser.pasted(raw)) else null }
+     LaunchedEffect(Unit) { KeptStations.load(ctx) }
++    // Spotify's, but none YouTube Music already gave
++    val onSpotify = remember(spotifyAll, tube) {
++        val have = tube.songs.map { Radio.key(it.title, it.artist) }.toSet()
++        spotifyAll.filter { Radio.key(it.title, it.artist) !in have }.take(10)
++    }
++    val findScope = rememberCoroutineScope()
++    var spotifySaid by remember { mutableStateOf<String?>(null) }
++    var finding by remember { mutableStateOf(false) }
++    // a song of Spotify's: found on YouTube Music, and played from there
++    fun playSpotify(s: Song) {
++        if (finding) return
++        finding = true; spotifySaid = "finding ${s.title.lowercase()}"
++        findScope.launch {
++            val t = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
++                runCatching { YouTubeMusic.find(s.title, s.artist.substringBefore(", ")) }.getOrNull()
++            }
++            finding = false
++            if (t != null) { spotifySaid = null; Playback.play(listOf(t), 0) } else spotifySaid = "${s.title.lowercase()} isn't on youtube music"
++        }
++    }
+     val videos = remember(videosAll, tube, byId) {
+         val have = (tube.songs.flatMap { listOf(it.id, Radio.key(it.title, it.artist)) } + listOfNotNull(byId?.id)).toSet()
+         videosAll.filter { it.id !in have && Radio.key(it.title, it.artist) !in have }.take(12)
+@@ -2660,6 +2738,10 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+         itemsIndexed(tube.songs, key = { _, s -> "t" + s.id }) { i, s ->
+             Box(row) { SongRow(s, pages = pages) { Playback.play(tube.songs, i) } }
+         }
++        if (onSpotify.isNotEmpty()) item { Label(spotifySaid ?: "on spotify") }
++        itemsIndexed(onSpotify, key = { _, s -> "s" + s.id }) { _, s ->
++            Box(row) { SongRow(s, pages = pages) { playSpotify(s) } }
++        }
+         if (tube.lists.isNotEmpty()) item {
+             Label("playlists on youtube music")
+             LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+@@ -3896,7 +3978,7 @@ private fun TvRail(tabs: List<String>, tab: String, onPlace: (String) -> Unit, p
      }
      // a little smaller, and scrolled if it must be, so settings stays above the mini player (it went under it)
      Column(Modifier.width(TV_RAIL).fillMaxHeight().padding(bottom = foot).verticalScroll(rememberScrollState()).padding(start = 28.dp, top = 24.dp, bottom = 12.dp)) {
@@ -3240,6 +3635,47 @@ index dbb68a4..a28309f 100644
          <item name="android:statusBarColor">@android:color/transparent</item>
          <item name="android:navigationBarColor">@android:color/transparent</item>
          <item name="android:windowLightStatusBar">false</item>
+diff --git a/app/src/play/java/app/ink/music/Spotify.kt b/app/src/play/java/app/ink/music/Spotify.kt
+index e700907..503ffe4 100644
+--- a/app/src/play/java/app/ink/music/Spotify.kt
++++ b/app/src/play/java/app/ink/music/Spotify.kt
+@@ -21,4 +21,5 @@ object Spotify {
+     suspend fun playlists(): List<Import.Theirs>? = null
+     suspend fun fresh(c: Context): Boolean = false
+     suspend fun songs(id: String, got: (Int) -> Unit = {}): List<Import.Said>? = null
++    suspend fun search(c: Context, q: String): List<Song> = emptyList()
+ }
+diff --git a/app/src/play/java/app/ink/music/SpotifySync.kt b/app/src/play/java/app/ink/music/SpotifySync.kt
+new file mode 100644
+index 0000000..4ee2381
+--- /dev/null
++++ b/app/src/play/java/app/ink/music/SpotifySync.kt
+@@ -0,0 +1,10 @@
++package app.ink.music
++
++import android.content.Context
++
++/** The play build signs in to no Spotify: nothing kept in step. */
++object SpotifySync {
++    fun count(c: Context): Int = 0
++    fun keep(c: Context, spotify: String, name: String, tube: TubeList, songs: List<Import.Said>) {}
++    suspend fun run(c: Context, force: Boolean = false) {}
++}
+diff --git a/app/src/play/java/app/ink/music/YouTubeMusic.kt b/app/src/play/java/app/ink/music/YouTubeMusic.kt
+index f38fe23..ef669e1 100644
+--- a/app/src/play/java/app/ink/music/YouTubeMusic.kt
++++ b/app/src/play/java/app/ink/music/YouTubeMusic.kt
+@@ -8,6 +8,10 @@ object YouTubeMusic {
+     fun known(id: String): Song? = null
+     fun remember(s: Song) {}
+     suspend fun search(q: String, all: Boolean = false) = TubeFound()
++    suspend fun songs(q: String): List<Song> = emptyList()
++    suspend fun albums(q: String): List<TubeAlbum> = emptyList()
++    suspend fun artists(q: String): List<TubeArtist> = emptyList()
++    suspend fun playlists(q: String): List<TubeAlbum> = emptyList()
+     suspend fun videos(q: String): List<Song> = emptyList()
+     suspend fun album(a: TubeAlbum): List<Song> = emptyList()
+     fun lyrics(id: String, title: String, artist: String): List<Line>? = emptyList()
 diff --git a/core/src/commonMain/kotlin/app/ink/music/InkMap.kt b/core/src/commonMain/kotlin/app/ink/music/InkMap.kt
 index 1233007..b2250f8 100644
 --- a/core/src/commonMain/kotlin/app/ink/music/InkMap.kt
@@ -3319,6 +3755,66 @@ index 6013020..b3b8907 100644
          }
          // the mast and its ball
          line(tipX, tipY + 2, tipX, top)
+diff --git a/core/src/jvmMain/kotlin/app/ink/music/SpotifyCanvas.kt b/core/src/jvmMain/kotlin/app/ink/music/SpotifyCanvas.kt
+index 634ccc0..1063637 100644
+--- a/core/src/jvmMain/kotlin/app/ink/music/SpotifyCanvas.kt
++++ b/core/src/jvmMain/kotlin/app/ink/music/SpotifyCanvas.kt
+@@ -71,14 +71,7 @@ object SpotifyCanvas {
+      * a 429): the first with the same title and artist.
+      */
+     private fun track(title: String, artist: String, pass: Pass): String? {
+-        val vars = JSONObject().put("searchTerm", "$title $artist").put("offset", 0).put("limit", 10).put("numberOfTopResults", 5)
+-            .put("includeAudiobooks", false).put("includePreReleases", false)
+-        val root = runCatching { ask("searchTracks", searchHash ?: SEARCH, vars, pass) }.getOrElse { e ->
+-            if ("PersistedQuery" !in e.message.orEmpty()) throw e
+-            searchHash = liveHash("searchTracks", pass) ?: throw e
+-            ask("searchTracks", searchHash!!, vars, pass)
+-        }
+-        val items = root.optJSONObject("data")?.optJSONObject("searchV2")?.optJSONObject("tracksV2")?.optJSONArray("items") ?: return null
++        val items = searchItems("$title $artist", 10, pass) ?: return null
+         val a = Search.fold(artist); val t = Search.fold(title.substringBefore(" (").substringBefore(" - "))
+         for (i in 0 until items.length()) {
+             val d = items.optJSONObject(i)?.optJSONObject("item")?.optJSONObject("data") ?: continue
+@@ -92,6 +85,39 @@ object SpotifyCanvas {
+         return null
+     }
+ 
++    /** A song as Spotify's search gives it: its words, its record's cover, its uri. */
++    data class Hit(val title: String, val artist: String, val album: String, val art: String?, val uri: String)
++
++    /** Spotify's songs for these words, its best first, by the web player's own search (find's "on spotify"). */
++    fun search(term: String, pass: Pass, limit: Int = 12): List<Hit> {
++        val items = searchItems(term, limit, pass) ?: return emptyList()
++        return (0 until items.length()).mapNotNull { i ->
++            val d = items.optJSONObject(i)?.optJSONObject("item")?.optJSONObject("data") ?: return@mapNotNull null
++            val title = d.optString("name").ifBlank { return@mapNotNull null }
++            val artists = d.optJSONObject("artists")?.optJSONArray("items")
++            val artist = (0 until (artists?.length() ?: 0)).mapNotNull { j ->
++                artists?.optJSONObject(j)?.optJSONObject("profile")?.optString("name")?.takeIf { it.isNotBlank() }
++            }.joinToString(", ").ifEmpty { return@mapNotNull null }
++            val record = d.optJSONObject("albumOfTrack")
++            val sources = record?.optJSONObject("coverArt")?.optJSONArray("sources")
++            val art = (0 until (sources?.length() ?: 0)).mapNotNull { j -> sources?.optJSONObject(j) }
++                .maxByOrNull { it.optInt("width", 0) }?.optString("url")?.takeIf { it.startsWith("https://") }
++            Hit(title, artist, record?.optString("name").orEmpty(), art, d.optString("uri"))
++        }
++    }
++
++    /** The search's songs, by the web player's own query; its hash read again from the player's scripts once stale. */
++    private fun searchItems(term: String, limit: Int, pass: Pass): org.json.JSONArray? {
++        val vars = JSONObject().put("searchTerm", term).put("offset", 0).put("limit", limit).put("numberOfTopResults", 5)
++            .put("includeAudiobooks", false).put("includePreReleases", false)
++        val root = runCatching { ask("searchTracks", searchHash ?: SEARCH, vars, pass) }.getOrElse { e ->
++            if ("PersistedQuery" !in e.message.orEmpty()) throw e
++            searchHash = liveHash("searchTracks", pass) ?: throw e
++            ask("searchTracks", searchHash!!, vars, pass)
++        }
++        return root.optJSONObject("data")?.optJSONObject("searchV2")?.optJSONObject("tracksV2")?.optJSONArray("items")
++    }
++
+     /** The song's canvas by the web player's own query; its hash read again from the player's scripts once stale. */
+     private fun canvasOf(uri: String, pass: Pass): String? {
+         repeat(2) { n ->
 diff --git a/tools/make_vigil_icon.py b/tools/make_vigil_icon.py
 new file mode 100644
 index 0000000..5b0b1c5

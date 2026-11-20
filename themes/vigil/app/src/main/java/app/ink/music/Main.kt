@@ -377,6 +377,8 @@ private fun App() {
     var allowed by remember { mutableStateOf(Library.allowed(ctx)) }
     val welcomed by Seeds.welcomed.collectAsState()
     LaunchedEffect(allowed) { if (allowed) Library.start(ctx) }
+    // Spotify playlists kept in step (the editions'): what's been added there, added on YouTube Music
+    LaunchedEffect(Unit) { kotlinx.coroutines.delay(20_000); runCatching { SpotifySync.run(ctx) } }
     // what plays found in the library once it's read (its cover, its record)
     val library by Library.songs.collectAsState()
     LaunchedEffect(library) { Playback.refresh() }
@@ -1468,7 +1470,7 @@ private fun LovedPage(pages: Pages) {
  * once (a second tap made a second playlist), then "open it".
  */
 @Composable
-internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
+internal fun KeepIt(name: String, found: List<Song>, pages: Pages, onTube: ((app.ink.music.TubeList) -> Unit)? = null) {
     val scope = rememberCoroutineScope()
     // where it's being made ("youtube", "server"), and once made, the page that opens it
     var making by remember(name, found) { mutableStateOf<String?>(null) }
@@ -1497,7 +1499,7 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
         }
     }
     if (who != null) Place("youtube", "youtube music") {
-        YouTubeAccount.makePlaylistOf(name, found)?.let { (list, n) -> said = "$n songs on youtube music"; true to Page.TubeList(list) }
+        YouTubeAccount.makePlaylistOf(name, found)?.let { (list, n) -> said = "$n songs on youtube music"; onTube?.invoke(list); true to Page.TubeList(list) }
             ?: run { said = "youtube music didn't take it"; false to null }
     }
     if (account != null) Place("server", "your server") {
@@ -2118,6 +2120,8 @@ private fun ImportPage(pages: Pages) {
     var theirs by remember { mutableStateOf<List<Import.Theirs>?>(null) }
     var wanted by remember { mutableStateOf<Import.Theirs?>(null) }
     var reading by remember { mutableStateOf<Int?>(null) }
+    // the Spotify playlist it came from (none for a file): made on YouTube Music, it's kept in step ([SpotifySync])
+    var fromSpotify by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(spotifyAt) {
         if (!Spotify.ready()) return@LaunchedEffect
         if (theirs == null) theirs = Spotify.playlists() ?: run { said = "spotify didn't say. sign in again"; null }
@@ -2125,7 +2129,7 @@ private fun ImportPage(pages: Pages) {
             reading = 0
             val songs = Spotify.songs(w.id) { reading = it }
             reading = null; wanted = null
-            if (songs.isNullOrEmpty()) said = "spotify didn't give that one's songs" else { chosen = Import.Listed(w.name, songs); lists = null }
+            if (songs.isNullOrEmpty()) said = "spotify didn't give that one's songs" else { chosen = Import.Listed(w.name, songs); lists = null; fromSpotify = w.id }
         }
     }
     fun open(w: Import.Theirs) {
@@ -2135,7 +2139,7 @@ private fun ImportPage(pages: Pages) {
             reading = 0
             val songs = Spotify.songs(w.id) { reading = it }
             reading = null; wanted = null
-            if (songs.isNullOrEmpty()) said = "spotify didn't give that one's songs" else { chosen = Import.Listed(w.name, songs); lists = null }
+            if (songs.isNullOrEmpty()) said = "spotify didn't give that one's songs" else { chosen = Import.Listed(w.name, songs); lists = null; fromSpotify = w.id }
         } else Spotify.signIn(ctx)
     }
     LaunchedEffect(chosen) {
@@ -2202,7 +2206,12 @@ private fun ImportPage(pages: Pages) {
                     BasicText("${found.size} of ${c.songs.size} found   ${found.count { !it.tube }} yours", style = pixel(12.sp, Ink.mid))
                     Spacer(Modifier.height(16.dp))
                     Word("play it", pixel(14.sp), touch = 8.dp) { Playback.play(found, 0) }
-                    KeepIt(c.name, found, pages)
+                    val spotifyId = fromSpotify
+                    KeepIt(c.name, found, pages, onTube = spotifyId?.let { id -> { list: app.ink.music.TubeList -> SpotifySync.keep(ctx, id, c.name, list, c.songs) } })
+                    if (spotifyId != null && YouTubeAccount.who.collectAsState().value != null) {
+                        Spacer(Modifier.height(8.dp))
+                        BasicText("made on youtube music, it's kept in step with spotify: songs added there are added here too", style = pixel(12.sp, Ink.mid))
+                    }
                     said?.let { Spacer(Modifier.height(10.dp)); BasicText(it, style = pixel(12.sp, Ink.mid)) }
                     Spacer(Modifier.height(14.dp))
                 }
@@ -2429,19 +2438,43 @@ private object Searches {
 
 /**
  * YouTube Music's answer to what's typed, and to its words alone where it has symbols (YouTube can answer a title's
- * symbols with nothing: "ピーナツ ⧸ 可不"), together; best answers first (the computer's).
+ * symbols with nothing: "ピーナツ ⧸ 可不"), together; best answers first (the computer's). Each part told ([part]) as it
+ * comes, songs and records not held for its artists and playlists (the editions', 2026-11-20: find lagged on the slowest).
  */
-private suspend fun tubeFound(text: String): TubeFound = kotlinx.coroutines.coroutineScope {
+private suspend fun tubeFound(text: String, part: (TubeFound) -> Unit = {}): TubeFound = kotlinx.coroutines.coroutineScope {
     val plain = Search.plain(text).takeIf { it != text && Search.enough(it) }
-    val asked = async { YouTubeMusic.search(text, all = true) }
-    val also = plain?.let { async { YouTubeMusic.search(it, all = true) } }
-    val a = asked.await(); val b = also?.await() ?: TubeFound()
-    TubeFound(
-        Search.best(text, (a.songs + b.songs).distinctBy { it.id }, { it.title }, { it.artist }).take(20),
-        Search.best(text, (a.albums + b.albums).distinctBy { it.url }, { it.title }, { it.artist }).take(12),
-        (a.artists + b.artists).distinctBy { it.name.lowercase() }.take(8),
-        (a.lists + b.lists).distinctBy { it.url }.take(12),
+    val asked = listOfNotNull(text, plain)
+    // gathered on this (the screen's) thread: each part's answer added as it comes, nothing shared between threads
+    var songs = emptyList<Song>(); var albums = emptyList<TubeAlbum>(); var artists = emptyList<TubeArtist>(); var lists = emptyList<TubeAlbum>()
+    fun now() = TubeFound(
+        Search.best(text, songs.distinctBy { it.id }, { it.title }, { it.artist }).take(20),
+        Search.best(text, albums.distinctBy { it.url }, { it.title }, { it.artist }).take(12),
+        artists.distinctBy { it.name.lowercase() }.take(8),
+        lists.distinctBy { it.url }.take(12),
     )
+    asked.flatMap { q -> listOf(
+        launch { songs = songs + YouTubeMusic.songs(q); part(now()) },
+        launch { albums = albums + YouTubeMusic.albums(q); part(now()) },
+        launch { artists = artists + YouTubeMusic.artists(q); part(now()) },
+        launch { lists = lists + YouTubeMusic.playlists(q); part(now()) },
+    ) }.forEach { it.join() }
+    now()
+}
+
+/** What find was answered lately (the editions'): the same words again (a letter taken back, typed again) at once. */
+private object Answers {
+    private const val MOST = 40
+    private val tube = object : LinkedHashMap<String, TubeFound>(MOST, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TubeFound>?) = size > MOST
+    }
+    private val videos = object : LinkedHashMap<String, List<Song>>(MOST, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Song>>?) = size > MOST
+    }
+    fun tube(q: String): TubeFound? = tube[q]
+    // an answer kept only if it found something: nothing found is asked again next time
+    fun keep(q: String, f: TubeFound) { if (f.songs.isNotEmpty() || f.albums.isNotEmpty()) tube[q] = f }
+    fun videos(q: String): List<Song>? = videos[q]
+    fun keep(q: String, v: List<Song>) { if (v.isNotEmpty()) videos[q] = v }
 }
 
 /** youtube.com's videos for what's typed and its words alone, together, best answers first. */
@@ -2504,10 +2537,22 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
         seen[0] = forced
         value = online to forced
     }
-    // YouTube Music too (the full build): what's typed and its words alone, best answers first
+    // YouTube Music too (the full build): what's typed and its words alone, best answers first, each part shown as it
+    // comes; the same words answered lately, at once
     val tubeAll by androidx.compose.runtime.produceState(TubeFound(), ask) {
         val text = ask?.first
-        value = if (!YouTubeMusic.available || text == null) TubeFound() else tubeFound(text)
+        if (!YouTubeMusic.available || text == null) { value = TubeFound(); return@produceState }
+        Answers.tube(text)?.let { value = it; return@produceState }
+        value = TubeFound()
+        value = tubeFound(text) { value = it }.also { Answers.keep(text, it) }
+    }
+    // Spotify's own search too, signed in to it (the editions'): it finds what's misspelled or half remembered; each
+    // played from YouTube Music once tapped
+    val spotifyAll by androidx.compose.runtime.produceState(emptyList<Song>(), ask) {
+        val text = ask?.first
+        value = emptyList()
+        if (text == null || !Spotify.available || !Spotify.signedIn()) return@produceState
+        value = Spotify.search(ctx, text)
     }
     // radio's stations by that name (ink radio's own first)
     val stations by androidx.compose.runtime.produceState(emptyList<Song>(), ask) {
@@ -2516,7 +2561,10 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
     // youtube.com's own videos (the full build): songs never put on YouTube Music, apart from its songs; none it already gave
     val videosAll by androidx.compose.runtime.produceState(emptyList<Song>(), ask) {
         val text = ask?.first
-        value = if (!YouTubeMusic.available || text == null) emptyList() else tubeVideos(text)
+        if (!YouTubeMusic.available || text == null) { value = emptyList(); return@produceState }
+        Answers.videos(text)?.let { value = it; return@produceState }
+        value = emptyList()
+        value = tubeVideos(text).also { Answers.keep(text, it) }
     }
     // a YouTube video's id in what's typed ("[VDvX1hzGZN4]", as a file downloaded from YouTube is often named): that video
     val tubeId = if (pasted || !YouTubeMusic.available) null else Search.tubeId(raw)
@@ -2527,6 +2575,26 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
     // a stream's own link pasted (not a service's): a station
     val streamed = remember(raw) { if (!pasted && RadioBrowser.isStream(raw)) Stations.of(RadioBrowser.pasted(raw)) else null }
     LaunchedEffect(Unit) { KeptStations.load(ctx) }
+    // Spotify's, but none YouTube Music already gave
+    val onSpotify = remember(spotifyAll, tube) {
+        val have = tube.songs.map { Radio.key(it.title, it.artist) }.toSet()
+        spotifyAll.filter { Radio.key(it.title, it.artist) !in have }.take(10)
+    }
+    val findScope = rememberCoroutineScope()
+    var spotifySaid by remember { mutableStateOf<String?>(null) }
+    var finding by remember { mutableStateOf(false) }
+    // a song of Spotify's: found on YouTube Music, and played from there
+    fun playSpotify(s: Song) {
+        if (finding) return
+        finding = true; spotifySaid = "finding ${s.title.lowercase()}"
+        findScope.launch {
+            val t = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { YouTubeMusic.find(s.title, s.artist.substringBefore(", ")) }.getOrNull()
+            }
+            finding = false
+            if (t != null) { spotifySaid = null; Playback.play(listOf(t), 0) } else spotifySaid = "${s.title.lowercase()} isn't on youtube music"
+        }
+    }
     val videos = remember(videosAll, tube, byId) {
         val have = (tube.songs.flatMap { listOf(it.id, Radio.key(it.title, it.artist)) } + listOfNotNull(byId?.id)).toSet()
         videosAll.filter { it.id !in have && Radio.key(it.title, it.artist) !in have }.take(12)
@@ -2669,6 +2737,10 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
         if (tube.songs.isNotEmpty()) item { Label("songs on youtube music") }
         itemsIndexed(tube.songs, key = { _, s -> "t" + s.id }) { i, s ->
             Box(row) { SongRow(s, pages = pages) { Playback.play(tube.songs, i) } }
+        }
+        if (onSpotify.isNotEmpty()) item { Label(spotifySaid ?: "on spotify") }
+        itemsIndexed(onSpotify, key = { _, s -> "s" + s.id }) { _, s ->
+            Box(row) { SongRow(s, pages = pages) { playSpotify(s) } }
         }
         if (tube.lists.isNotEmpty()) item {
             Label("playlists on youtube music")
