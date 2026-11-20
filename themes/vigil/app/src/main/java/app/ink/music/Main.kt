@@ -2455,11 +2455,15 @@ private suspend fun tubeFound(text: String, part: (TubeFound) -> Unit = {}): Tub
     asked.flatMap { q -> listOf(
         launch { songs = songs + YouTubeMusic.songs(q); part(now()) },
         launch { albums = albums + YouTubeMusic.albums(q); part(now()) },
-        launch { artists = artists + YouTubeMusic.artists(q); part(now()) },
-        launch { lists = lists + YouTubeMusic.playlists(q); part(now()) },
+        // who and playlists after a moment: typing on, they're never asked (half the asking, half the data)
+        launch { kotlinx.coroutines.delay(RESTED); artists = artists + YouTubeMusic.artists(q); part(now()) },
+        launch { kotlinx.coroutines.delay(RESTED); lists = lists + YouTubeMusic.playlists(q); part(now()) },
     ) }.forEach { it.join() }
     now()
 }
+
+/** How long the typing rests before find asks for what matters less (artists, playlists, youtube.com's videos). */
+private const val RESTED = 700L
 
 /** What find was answered lately (the editions'): the same words again (a letter taken back, typed again) at once. */
 private object Answers {
@@ -2564,6 +2568,7 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
         if (!YouTubeMusic.available || text == null) { value = emptyList(); return@produceState }
         Answers.videos(text)?.let { value = it; return@produceState }
         value = emptyList()
+        kotlinx.coroutines.delay(RESTED)
         value = tubeVideos(text).also { Answers.keep(text, it) }
     }
     // a YouTube video's id in what's typed ("[VDvX1hzGZN4]", as a file downloaded from YouTube is often named): that video
@@ -2703,16 +2708,17 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
                 Box(row) { SongRow(s, pages = pages) { Playback.play(foundSongs, i) } }
             }
         }
-        // the first few stations, then radio with these words looked for there, every way (2026-11-17, the computer's)
-        if (stations.isNotEmpty()) item {
-            Label("radio")
-            LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                items(stations.take(6), key = { "r" + it.id }) { s -> StationTile(s, false, false, s.artist) { Playback.play(listOf(s), 0) } }
-            }
-            Word("more stations", pixel(13.sp, Ink.mid), row.padding(top = 8.dp), touch = 8.dp) { RadioAsk.look(online); pages.close() }
-            Spacer(Modifier.height(10.dp))
+        // songs first (the editions', 2026-11-20: a song looked for was found, but under radio, artists and records
+        // named like it): YouTube Music's best 8, then Spotify's, then who and what's named so, then the rest
+        if (tube.songs.isNotEmpty()) item { Label("songs on youtube music") }
+        itemsIndexed(tube.songs.take(8), key = { _, s -> "t" + s.id }) { i, s ->
+            Box(row) { SongRow(s, pages = pages) { Playback.play(tube.songs, i) } }
         }
-        // what YouTube Music has: its artists, records, songs, then playlists
+        if (onSpotify.isNotEmpty()) item { Label(spotifySaid ?: "on spotify") }
+        itemsIndexed(onSpotify, key = { _, s -> "s" + s.id }) { _, s ->
+            Box(row) { SongRow(s, pages = pages) { playSpotify(s) } }
+        }
+        // what YouTube Music has: its artists and records
         if (tubeArtists.isNotEmpty()) item {
             Label("artists on youtube music")
             LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -2734,13 +2740,18 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
             }
             Spacer(Modifier.height(10.dp))
         }
-        if (tube.songs.isNotEmpty()) item { Label("songs on youtube music") }
-        itemsIndexed(tube.songs, key = { _, s -> "t" + s.id }) { i, s ->
-            Box(row) { SongRow(s, pages = pages) { Playback.play(tube.songs, i) } }
+        // the first few stations, then radio with these words looked for there, every way (2026-11-17, the computer's)
+        if (stations.isNotEmpty()) item {
+            Label("radio")
+            LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                items(stations.take(6), key = { "r" + it.id }) { s -> StationTile(s, false, false, s.artist) { Playback.play(listOf(s), 0) } }
+            }
+            Word("more stations", pixel(13.sp, Ink.mid), row.padding(top = 8.dp), touch = 8.dp) { RadioAsk.look(online); pages.close() }
+            Spacer(Modifier.height(10.dp))
         }
-        if (onSpotify.isNotEmpty()) item { Label(spotifySaid ?: "on spotify") }
-        itemsIndexed(onSpotify, key = { _, s -> "s" + s.id }) { _, s ->
-            Box(row) { SongRow(s, pages = pages) { playSpotify(s) } }
+        if (tube.songs.size > 8) item { Label("more songs on youtube music") }
+        itemsIndexed(tube.songs.drop(8), key = { _, s -> "t" + s.id }) { i, s ->
+            Box(row) { SongRow(s, pages = pages) { Playback.play(tube.songs, i + 8) } }
         }
         if (tube.lists.isNotEmpty()) item {
             Label("playlists on youtube music")
