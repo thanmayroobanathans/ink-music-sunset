@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Neon Coast</title>
+<meta name="description" content="Neon Coast in your browser: hand-picked radio, podcasts and the songs on your phone. Add it to your home screen.">
+<meta name="theme-color" content="#0F0820">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Neon Coast">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="../img/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../img/apple-touch-icon.png">
+<link rel="preload" href="../fonts/anton.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../fonts/chakra-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="scan" aria-hidden="true"></div>
+
+<header class="top">
+  <h1 class="place" id="place">AIRWAVES</h1>
+  <p class="hint" id="install" hidden>
+    <span>on iphone: tap <b>share</b>, then <b>add to home screen</b>. it opens like an app.</span>
+    <button class="word" id="install-off" type="button">got it</button>
+  </p>
+</header>
+
+<main>
+  <!-- AIRWAVES: ink radio's own stations, india's, and any station by name -->
+  <section id="airwaves" class="view" aria-labelledby="place">
+    <label class="find">
+      <span class="sr">find a station</span>
+      <input id="radio-q" type="search" placeholder="find a station, a city, a sound" autocomplete="off" enterkeyhint="search">
+    </label>
+    <div id="radio-found" class="shelf" hidden></div>
+    <h2 class="label">ink radio <span>real djs, listener-powered, hand-picked</span></h2>
+    <ol id="ink-radio" class="rows"></ol>
+    <h2 class="label">from india <span>the most played</span></h2>
+    <ol id="india" class="rows"><li class="quiet">tuning in…</li></ol>
+  </section>
+
+  <!-- TALK RADIO: podcasts, by Apple's directory -->
+  <section id="talk" class="view" hidden>
+    <div id="show" hidden></div>
+    <div id="talk-home">
+      <label class="find">
+        <span class="sr">find a show</span>
+        <input id="talk-q" type="search" placeholder="find a show" autocomplete="off" enterkeyhint="search">
+      </label>
+      <div id="talk-found" class="shelf" hidden></div>
+      <h2 class="label" id="following-label" hidden>following</h2>
+      <ol id="following" class="rows"></ol>
+      <h2 class="label">top in india</h2>
+      <ol id="top-shows" class="rows"><li class="quiet">reading the charts…</li></ol>
+    </div>
+  </section>
+
+  <!-- TRACKS: the songs on this phone, kept in the app -->
+  <section id="tracks" class="view" hidden>
+    <div class="actions">
+      <label class="big" for="add-files">ADD SONGS</label>
+      <input id="add-files" type="file" accept="audio/*,.mp3,.m4a,.aac,.flac,.wav" multiple hidden>
+      <button class="word" id="play-all" type="button" hidden>play all</button>
+      <button class="word" id="shuffle" type="button" hidden>shuffle</button>
+      <button class="word" id="edit" type="button" hidden>edit</button>
+    </div>
+    <p class="quiet" id="tracks-note">songs from your phone's files, kept in this app on this phone. they play with the screen locked.</p>
+    <ol id="track-list" class="rows"></ol>
+    <p class="quiet more">youtube music lives in the <a href="../">android app and the pc app</a>.</p>
+  </section>
+</main>
+
+<!-- what's playing, small, over the places -->
+<div class="mini" id="mini" hidden>
+  <button class="mini-open" id="mini-open" type="button" aria-label="open the player">
+    <img class="mini-art" id="mini-art" alt="">
+    <span class="mini-words"><span class="mini-title" id="mini-title"></span><span class="mini-by" id="mini-by"></span></span>
+  </button>
+  <button class="mini-play" id="mini-play" type="button" aria-label="play or pause"></button>
+</div>
+
+<nav class="places" aria-label="places">
+  <a href="#airwaves" data-place="airwaves" aria-current="page">airwaves</a>
+  <a href="#talk" data-place="talk">talk radio</a>
+  <a href="#tracks" data-place="tracks">tracks</a>
+</nav>
+
+<!-- the player, the whole screen -->
+<div class="player" id="player" hidden role="dialog" aria-modal="true" aria-label="now playing">
+  <button class="word close" id="player-close" type="button" aria-label="close the player">close</button>
+  <img class="player-art" id="player-art" alt="">
+  <p class="live" id="player-live" hidden>live</p>
+  <h2 class="player-title" id="player-title"></h2>
+  <p class="player-by" id="player-by"></p>
+  <div class="line" id="player-line" hidden>
+    <input id="seek" type="range" min="0" max="1000" value="0" aria-label="where in it">
+    <div class="times"><span id="t-at">0:00</span><span id="t-all">0:00</span></div>
+  </div>
+  <p class="said" id="player-said" aria-live="polite"></p>
+  <div class="controls">
+    <button type="button" id="c-prev" aria-label="previous">back</button>
+    <button type="button" id="c-back" aria-label="15 seconds back" hidden>-15</button>
+    <button type="button" id="c-play" class="play" aria-label="play or pause"></button>
+    <button type="button" id="c-fwd" aria-label="30 seconds on" hidden>+30</button>
+    <button type="button" id="c-next" aria-label="next">next</button>
+  </div>
+</div>
+
+<p class="toast" id="toast" role="status" hidden></p>
+
+<script src="app.js"></script>
+</body>
+</html>

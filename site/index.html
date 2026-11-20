@@ -79,6 +79,8 @@ h1 .line { display: block; }
 .get svg { width: 1.15em; height: 1.15em; }
 .get:hover { filter: brightness(1.08); }
 .fine { margin: .9rem 0 0; font-size: .9rem; color: var(--soft); }
+.also { margin: .7rem 0 0; font-size: .95rem; color: var(--soft); max-width: 30rem; }
+.also a { color: var(--teal); }
 .qr { display: none; }
 @media (min-width: 900px) and (hover: hover) {
   .qr { display: flex; gap: 1rem; align-items: center; margin-top: 2rem; color: var(--soft); max-width: 22rem; }
@@ -182,6 +184,7 @@ footer { border-top: 1px solid #3B2160; }
       Download for Android
     </a>
     <p class="fine">Version {{VERSION}}, {{SIZE}}. Android 12 or newer.</p>
+    <p class="also">On an iPhone? <a href="app/">Open Neon Coast in your browser</a> and add it to your home screen. On a PC? <a href="https://github.com/thanmayroobanathans/ink-music-sunset/releases/download/neon-coast-latest/neon-coast.msi">Get it for Windows</a>.</p>
   </div>
   <div class="horizon" aria-hidden="true">
     <div class="sun"></div>
@@ -243,6 +246,7 @@ footer { border-top: 1px solid #3B2160; }
         <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 3h2v10.2l3.6-3.6 1.4 1.4-6 6-6-6 1.4-1.4 3.6 3.6V3zM5 19h14v2H5z"/></svg>
         Download for Android
       </a>
+      <p class="also">On an iPhone, <a href="app/">the web app</a> plays the radio, podcasts and the songs on your phone: open it in Safari, tap Share, then Add to Home Screen. YouTube Music is in the Android and Windows apps.</p>
       <div class="qr"><img src="img/qr.svg" alt="QR code for this page" width="96" height="96"><span>On a laptop? Scan this with your phone to open this page there.</span></div>
     </div>
   </section>

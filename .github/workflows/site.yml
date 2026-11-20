@@ -1,0 +1,87 @@
+# Neon Coast's website and its web app (site/, site/app/): the web app tried on an iPhone's engine and Chrome's, then
+# the site published on GitHub Pages, with the newest Android build's facts written in. Runs when the site changes
+# (a build of the apps publishes it too, in build.yml), or by hand.
+name: The website and the web app
+
+on:
+  push:
+    paths: ["site/**", ".github/webapp-test/**", ".github/workflows/site.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # the test's pictures, as a draft release
+  pages: write
+  id-token: write
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Playwright (WebKit and Chromium), and ffmpeg for a song
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps webkit chromium
+          sudo apt-get install -y ffmpeg > /dev/null
+
+      - name: Try the web app
+        run: |
+          (cd site && python3 -m http.server 8000 > /dev/null 2>&1 &)
+          sleep 2
+          cd .github/webapp-test && python3 test.py
+
+      - name: The pictures, to a draft release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          d=.github/webapp-test/shots
+          ls $d/*.png > /dev/null 2>&1 || { echo "no pictures"; exit 0; }
+          gh release create "screens-web-run${GITHUB_RUN_NUMBER}" $d/* --draft --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "Screens: web app, run ${GITHUB_RUN_NUMBER}" --notes "The web app, tried in WebKit as an iPhone 15."
+
+  deploy:
+    needs: test
+    if: always() && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: The newest Android build's facts, into the page
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download neon-coast-latest --pattern neon-coast.apk --dir apk --repo "$GITHUB_REPOSITORY"
+          f=apk/neon-coast.apk
+          size=$(python3 -c 'import os, sys; print(f"{os.path.getsize(sys.argv[1]) / 1048576:.1f} MB")' "$f")
+          sha=$(sha256sum "$f" | cut -d' ' -f1)
+          ver=$(grep -oE 'versionName = "[^"]+"' themes/neon-coast/app/build.gradle.kts | cut -d'"' -f2)
+          built=$(gh release view neon-coast-latest --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[] | select(.name == "neon-coast.apk") | .updatedAt' | xargs -I{} date -u -d {} +'%-d %B %Y')
+          sed -i "s|{{VERSION}}|$ver|g; s|{{SIZE}}|$size|g; s|{{SHA256}}|$sha|g; s|{{BUILT}}|$built|g" site/index.html
+          ! grep -n '{{' site/index.html
+          echo "version $ver, $size, built $built"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Publish
+        id: deploy
+        uses: actions/deploy-pages@v4

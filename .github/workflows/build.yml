@@ -9,6 +9,8 @@ name: Build the editions
 
 on:
   push:
+    # the website alone changing doesn't build the apps again (site.yml tries and publishes it)
+    paths-ignore: ["site/**", ".github/webapp-test/**", ".github/workflows/site.yml"]
   workflow_dispatch:
 
 permissions:
@@ -354,7 +356,9 @@ jobs:
     # an unsigned .ipa to sideload (AltStore, SideStore, Sideloadly sign it with your own Apple ID), and a run in the
     # iPhone simulator, photographed
     name: iphone ${{ matrix.edition.name }}
-    # not after the phones' build: it's the slowest, and the release it adds to is there already
+    # by hand only (Actions > Build the editions > Run workflow): iPhones get the web app (site/app/); this ipa is
+    # for sideloading, and its simulator run doesn't link yet. Not after the phones' build: it's the slowest
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-15
     timeout-minutes: 90
     strategy:
