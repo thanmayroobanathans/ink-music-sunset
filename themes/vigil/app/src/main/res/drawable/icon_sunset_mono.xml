@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- VIGIL theme (an unofficial build): the icon's monochrome (themed icons): the moon over the city (made by make_vigil_icon.py) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M49,40 A14,14 0 1 1 77,40 A14,14 0 1 1 49,40 Z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M0,66 L9,66 L9,108 L0,108 Z M8,108 L8,61 L9.75,61 L9.75,58 L13.25,58 L13.25,61 L15,61 L15,108 Z M14,63 L23,63 L23,108 L14,108 Z M22,108 L22,57 L25,45 L28,57 L28,108 Z M27,60 L37,60 L37,108 L27,108 Z M36,108 L36,57 L40,52 L44,57 L44,108 Z M43,64 L54,64 L54,108 L43,108 Z M53,108 L53,55 L56.5,43 L60,55 L60,108 Z M59,108 L59,61 L61.5,61 L61.5,58 L66.5,58 L66.5,61 L69,61 L69,108 Z M68,62 L77,62 L77,108 L68,108 Z M76,108 L76,59 L79,47 L82,59 L82,108 Z M81,61 L91,61 L91,108 L81,108 Z M90,108 L90,60 L92,60 L92,57 L96,57 L96,60 L98,60 L98,108 Z M97,65 L108,65 L108,108 L97,108 Z" />
+</vector>

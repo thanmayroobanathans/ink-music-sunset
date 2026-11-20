@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- VIGIL theme (an unofficial build): a pale moon over a rain-soaked city at night (drawable/icon_sky, icon_sunset;
+     made by tools/make_vigil_icon.py); the moon and the skyline are the monochrome for themed icons -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/icon_sky" />
+    <foreground android:drawable="@drawable/icon_sunset" />
+    <monochrome android:drawable="@drawable/icon_sunset_mono" />
+</adaptive-icon>

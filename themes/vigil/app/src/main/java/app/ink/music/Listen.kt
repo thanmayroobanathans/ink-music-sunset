@@ -1,0 +1,836 @@
+package app.ink.music
+
+import android.content.Context
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.WindowInsetsSides
+import dev.chrisbanes.haze.hazeSource
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.Calendar
+
+/**
+ * What the listen page shows, read once a run (and again when your artists change): your
+ * artists' best-known songs (each a mix's start) and records, the week on indie radio, the
+ * server's newest records, and radio. Each shelf shows once it has something.
+ */
+/**
+ * A listen row that moves when one arrives above it (what's new since you were here, read a moment after it opens):
+ * slid down on ink's curve, not jumped; under less motion, no animation.
+ */
+@Composable
+private fun Modifier.moving(scope: androidx.compose.foundation.lazy.LazyItemScope): Modifier =
+    if (Moves.less.collectAsState().value) this
+    else with(scope) { this@moving.animateItem(fadeInSpec = null, placementSpec = tween(Motion.ENTER, easing = Motion.expo), fadeOutSpec = null) }
+
+/** Listen's shelves in their usual order (Fresh.order moves them for the moment). */
+// listen is you, INK is the world (2026-11-12, Bronson): live sets, ink radio, the indie chart and stations are INK's;
+// your mix (your own music at a tempo) is here
+val LISTEN_SHELVES = listOf("fromYours", "monday", "friday", "videos", "tuner", "forYou", "madeForYou", "jumpBack", "kept", "episodes", "tubeMixes", "mixes", "yourMix", "because", "newToYou",
+    "onRepeat", "fresh", "forgotten", "uploads", "tubeLists", "tubeArtists", "tubeRecords", "records", "newest", "yours")
+
+object Listen {
+    /** Each time ink music is opened again after a while: the shelves' order is made anew for it. */
+    var visit by androidx.compose.runtime.mutableStateOf(0)
+    /** When the listen page was first shown this run (its shelves cascade only then). */
+    var shownAt = 0L
+    val indie = MutableStateFlow<List<IndieChart.Entry>>(emptyList())
+    val records = MutableStateFlow<List<TubeAlbum>>(emptyList())
+    val newest = MutableStateFlow<List<String>>(emptyList())
+    val radio = MutableStateFlow<List<Pair<String, String>>>(emptyList())
+    /** The genres you like, each with its stations (the play build's home has no YouTube to fill it). */
+    val stations = MutableStateFlow<List<Pair<String, List<Song>>>>(emptyList())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var loaded = false
+    private var forArtists: List<String> = emptyList()
+
+    fun load(c: Context) {
+        val artists = Seeds.artists.value.map { it.name }
+        if (loaded && artists == forArtists) return
+        val first = !loaded
+        loaded = true; forArtists = artists
+        if (first) {
+            scope.launch { newest.value = Server.newest(12) }
+            scope.launch { indie.value = IndieChart.week(c) }
+        }
+        // the genres you like first, then the rest
+        val liked = Seeds.genres.value
+        radio.value = Stations.genres.sortedBy { (word, _) -> if (word in liked) 0 else 1 }
+        scope.launch {
+            val shown = liked.ifEmpty { if (YouTubeMusic.available) emptyList() else listOf("lofi", "jazz") }.take(3)
+            stations.value = shown.mapNotNull { word -> Stations.genres.firstOrNull { it.first == word }?.let { (w, tag) -> w to Stations.top(c, tag) } }
+                .filter { it.second.isNotEmpty() }
+        }
+        scope.launch {
+            // each artist's best-known song (their mix starts from it), found once and kept: looked for side by side,
+            // written down one at a time
+            Seeds.artists.value.filter { it.hit == null }.map { a -> async { a.name to YouTubeMusic.hit(a.name) } }.awaitAll()
+                .forEach { (name, hit) -> hit?.let { Seeds.found(name, it) } }
+        }
+        scope.launch {
+            // their records: as they were last time at once, then read again side by side
+            if (records.value.isEmpty()) records.value = keptRecords(c)
+            val found = Seeds.artists.value.take(8).map { a -> async { YouTubeMusic.records(a.name).take(2) } }.awaitAll().flatten()
+            if (found.isNotEmpty()) { records.value = found; keepRecords(c, found) }
+        }
+    }
+
+    private fun recordsFile(c: Context) = java.io.File(c.filesDir, "listen-records.json")
+
+    private fun keptRecords(c: Context): List<TubeAlbum> = runCatching {
+        val a = org.json.JSONArray(recordsFile(c).readText())
+        (0 until a.length()).map { a.getJSONObject(it) }.map { TubeAlbum(it.getString("url"), it.getString("title"), it.getString("artist"), it.optString("art").ifEmpty { null }) }
+    }.getOrDefault(emptyList())
+
+    private fun keepRecords(c: Context, list: List<TubeAlbum>) = runCatching {
+        recordsFile(c).writeText(org.json.JSONArray(list.map { org.json.JSONObject().put("url", it.url).put("title", it.title).put("artist", it.artist).put("art", it.art.orEmpty()) }).toString())
+    }
+
+    /**
+     * An artist's mix: their song at once, and YouTube Music's radio from it behind it once it's read
+     * (a second or two; a speaker takes the whole queue, so it waits for it).
+     */
+    suspend fun mix(hit: Song) {
+        if (Casting.on.value != null) return Playback.play(listOf(hit) + withContext(Dispatchers.IO) { YouTubeMusic.related(hit.id) }, 0)
+        Playback.play(listOf(hit), 0)
+        Playback.follow(hit, withContext(Dispatchers.IO) { YouTubeMusic.related(hit.id) })
+    }
+
+    fun greeting(): String = Eggs.greeting() ?: when (Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) {
+        in 5..11 -> "GOOD MORNING"
+        in 12..16 -> "GOOD AFTERNOON"
+        in 17..21 -> "GOOD EVENING"
+        else -> "LATE NIGHT"
+    }
+}
+
+/**
+ * The listen page, the library's first: something to play the moment ink music opens, whatever
+ * the phone holds. The greeting and the cog; then, each once it has something: jump back in (what
+ * you played lately), your mixes on youtube music, mixes for you, on repeat, new from your artists,
+ * ink radio, the week on indie radio, forgotten favorites, your playlists, your artists and records
+ * on youtube music, from artists you love, new on your server, from your records, and radio.
+ */
+@Composable
+fun ListenPage(pages: Pages, pad: PaddingValues, state: LazyListState) {
+    val ctx = LocalContext.current
+    val seeds by Seeds.artists.collectAsState()
+    val indie by Listen.indie.collectAsState()
+    val records by Listen.records.collectAsState()
+    val newestIds by Listen.newest.collectAsState()
+    val radio by Listen.radio.collectAsState()
+    val stations by Listen.stations.collectAsState()
+    val albums by Library.albums.collectAsState()
+    val seed by Order.seed.collectAsState()
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(seeds.map { it.name }) { Listen.load(ctx); Weekly.load(ctx) }
+    LaunchedEffect(Unit) { Picks.start(ctx); Picks.startFriday(); Picks.startElectronic(); Updates.check(ctx) }
+    val update by Updates.offer.collectAsState()
+    // the computer's offer: newer than what played here, and nothing playing here
+    val offer by SyncPhone.theirs.collectAsState()
+    val nowHere by Playback.now.collectAsState()
+    val putAside by SyncPhone.dismissed.collectAsState()
+    val firstHeard by EggsNow.first.collectAsState()
+    val continued = offer?.takeUnless { it.at <= SyncPhone.playedAt || it.at <= putAside || nowHere?.playing == true }
+    val pickedRecordsAll by Picks.records.collectAsState()
+    val pickedRecords = pickedRecordsAll.unblocked { it.pick.title to it.pick.artist }
+    val pickedSongsAll by Picks.songs.collectAsState()
+    val pickedSongs = pickedSongsAll.unblocked { it.pick.title to it.pick.artist }
+    val friday by Picks.friday.collectAsState()
+    val electronic by Picks.electronic.collectAsState()
+    val listened by Listened.now.collectAsState()
+    val allSongs by Library.songs.collectAsState()
+    val brought by Fresh.brought.collectAsState()
+    var knowMeShut by remember { mutableStateOf(java.io.File(ctx.filesDir, "know-me-shut").exists()) }
+    val fromYours = remember(pickedRecords, pickedSongs, friday, electronic, listened, allSongs, brought) { Picks.yours(listened, allSongs, brought) }
+    // your server's records kept on the phone: with no signal they come first, "no data? no problem"
+    val kept by Offline.kept.collectAsState()
+    val keptRecords = remember(kept, albums) { albums.filter { a -> a.songs.any { it.id in kept } } }
+    val online = remember(kept) { Quality.online(ctx) }
+    val episodes by Pods.fresh.collectAsState()
+    LaunchedEffect(Unit) { Pods.refresh(ctx) }
+    val heard by androidx.compose.runtime.produceState<List<History.Heard>>(emptyList()) {
+        value = withContext(Dispatchers.IO) { History.read(ctx) }
+    }
+    // what you played lately: a record each (newest first), as songs to play from; then, signed in
+    // to youtube music, what you played there (the ones this phone hasn't just said)
+    val recent = remember(heard) { heard.asReversed().distinctBy { it.album.ifEmpty { it.id } }.take(10) }
+    // youtube's history, none of the blocked (their listens count for nothing)
+    val tubeHeardAll by YouTubeAccount.history.collectAsState()
+    val blockedNow by Blocked.kept.collectAsState()
+    val tubeHeard = remember(tubeHeardAll, blockedNow) { tubeHeardAll.filter { !Blocked.hides(it) } }
+    val tubeRecent = remember(tubeHeard, recent) {
+        val said = recent.map { it.id }.toSet()
+        tubeHeard.filter { it.id !in said }.distinctBy { it.album.ifEmpty { it.id } }.take((16 - recent.size).coerceAtLeast(6))
+    }
+    val tubeRecords by YouTubeAccount.records.collectAsState()
+    val tubeArtists by YouTubeAccount.artists.collectAsState()
+    val tubeMixes by YouTubeAccount.mixes.collectAsState()
+    val fresh by YouTubeAccount.fresh.collectAsState()
+    val tubeLists by YouTubeAccount.playlists.collectAsState()
+    val uploads by YouTubeAccount.uploads.collectAsState()
+    val liked by YouTubeAccount.liked.collectAsState()
+    val lovedIds by Loved.ids.collectAsState()
+    val lovedTube by Loved.tube.collectAsState()
+    val songs by Library.songs.collectAsState()
+    val recentSongs = remember(recent, songs) { recent.mapNotNull { Library.song(it.id) } }
+    LaunchedEffect(songs.isNotEmpty()) { Discover.start(ctx, songs) }
+    // your taste made again once the library's read (what you keep and love counts)
+    LaunchedEffect(songs.isNotEmpty()) { if (songs.isNotEmpty()) Fresh.build(ctx) }
+    // a played song as one to play again: the library's, else a YouTube song this run knows (liked, heard there, loved)
+    val known = remember(liked, tubeHeard, lovedTube) { (liked + tubeHeard + lovedTube).associateBy { it.id } }
+    fun songOf(id: String) = Library.song(id) ?: known[id] ?: YouTubeMusic.known(id)
+    // on repeat: what this phone played most these 30 days, twice or more
+    val onRepeat = remember(heard, known, songs) {
+        val since = System.currentTimeMillis() - 30L * 86_400_000
+        heard.filter { it.at > since }.groupingBy { it.id }.eachCount().filter { it.value >= 2 }
+            .entries.sortedByDescending { it.value }.mapNotNull { songOf(it.key) }.take(12)
+    }
+    // forgotten favorites: songs you love or liked, not heard these three months (here or on youtube music),
+    // nor loved this last month; a different handful each day
+    val forgotten = remember(heard, tubeHeard, liked, lovedIds, lovedTube, songs) {
+        val now = System.currentTimeMillis()
+        val lately = heard.filter { it.at > now - 90L * 86_400_000 }.map { it.id }.toSet() + tubeHeard.map { it.id }
+        (liked + lovedTube + songs.filter { it.id in lovedIds }).distinctBy { it.id }
+            .filter { it.id !in lately && (Loved.lovedAt(it) ?: 0L) < now - 30L * 86_400_000 }
+            .shuffled(kotlin.random.Random(now / 86_400_000)).take(15)
+    }
+    val newest = remember(newestIds, albums) { newestIds.mapNotNull { id -> albums.firstOrNull { it.id == id } } }
+    val yours = remember(albums, seed) { Order.of(albums, seed) { it.id }.take(12) }
+    val mixes = seeds.filter { it.hit != null }
+
+    // ---- keeping it fresh (Fresh): your taste, what's new since you were here, three of ten from INK ----
+    val taste by Fresh.taste.collectAsState()
+    val since by Fresh.since.collectAsState()
+    // new from your artists, the ones you've passed over stepping back (said not for you, gone)
+    val fromYoursNow = remember(fromYours, taste) {
+        fromYours.filter { !taste.refused(it.pick.artist) && (!Fresh.ready || Fresh.seen.fresh(Fresh.key(it.pick)) > .1) }
+            .sortedByDescending { if (Fresh.ready) Fresh.seen.fresh(Fresh.key(it.pick)) else 1.0 }
+    }
+    // from INK, for you: the critics' and djs' picks not already above, in your order, each saying why
+    val forYou = remember(pickedRecords, pickedSongs, electronic, fromYours, taste) {
+        val above = fromYours.map { Curation.key(it.pick) }.toSet()
+        val all = pickedRecords + pickedSongs + electronic.map { Picks.Shown(it, it.art, listOf(it.from)) }
+        Fresh.rank(all.filter { Curation.key(it.pick) !in above }, taste).take(16)
+    }
+    fun openPick(s: Picks.Shown) = scope.launch {
+        val a = if (s.pick.record) Picks.record(s.pick) else null
+        a?.let { pages.open(Page.Tube(it)) } ?: Picks.song(s.pick.title, s.pick.artist)?.let { Playback.play(listOf(it), 0) }
+    }
+    // a record begun lately and left partway (this phone's, three days): to pick up
+    val pickUp = remember(heard, albums) {
+        val lately = heard.filter { it.at > System.currentTimeMillis() - 3 * 86_400_000L && it.record.isNotEmpty() }
+        lately.asReversed().map { it.record }.distinct().firstNotNullOfOrNull { rec ->
+            val a = albums.firstOrNull { it.id == rec } ?: return@firstNotNullOfOrNull null
+            val got = lately.filter { it.record == rec }.map { it.id }.distinct().size
+            a.takeIf { it.songs.size >= 4 && got in 1 until (it.songs.size * 6 / 10) }
+        }
+    }
+    val sinceLines = remember(fromYoursNow, forYou, newest, episodes, pickUp, since) {
+        if (!Fresh.ready) return@remember emptyList<NewLine>()
+        fun new(key: String) = Fresh.seen.first(key).let { it == null || (since != null && it > since!!) }
+        val out = ArrayList<NewLine>()
+        pickUp?.let { a -> if (Fresh.seen.fresh("pickup:${a.id}") > .3) out += NewLine("pickup:${a.id}", a.title, "${a.artist.lowercase()}, left partway") { pages.open(Page.Record(a.id)) } }
+        fromYoursNow.filter { new(Fresh.key(it.pick)) }.take(2).forEach { y ->
+            out += NewLine(Fresh.key(y.pick), y.pick.title, "${y.pick.artist.lowercase()}, new") { openPick(y) }
+        }
+        forYou.firstOrNull { !it.stretch && new(Fresh.key(it.item.pick)) }?.let { p ->
+            out += NewLine(Fresh.key(p.item.pick), p.item.pick.title, p.item.pick.artist.lowercase() + (Fresh.reason(p.item, false, taste)?.let { ", $it" } ?: "")) { openPick(p.item) }
+        }
+        newest.filter { new("server:${it.id}") }.let { n -> n.firstOrNull()?.let { a ->
+            out += NewLine("server:${a.id}", a.title, if (n.size > 1) "${a.artist.lowercase()}, on your server, and ${n.size - 1} more" else "${a.artist.lowercase()}, on your server") { pages.open(Page.Record(a.id)) }
+            n.drop(1).forEach { Fresh.seen.shown("server:${it.id}") }
+        } }
+        episodes.filter { new("ep:${it.id}") }.let { n -> n.firstOrNull()?.let { e ->
+            out += NewLine("ep:${e.id}", e.title, if (n.size > 1) "${e.album.lowercase()}, and ${n.size - 1} more episodes" else "${e.album.lowercase()}, new episode") { Playback.play(listOf(e), 0) }
+            n.drop(1).forEach { Fresh.seen.shown("ep:${it.id}") }
+        } }
+        out.take(4)
+    }
+    // the shelves' order for this visit (held: a shelf doesn't move under your thumb)
+    val order = remember(Listen.visit) { Fresh.order(LISTEN_SHELVES) }
+    // one of each on the page (Unique): the shelves in the order shown, each a record only once, the higher shelf
+    // keeping it; on a shelf, an artist never twice in a row
+    val one = remember(order, fromYoursNow, forYou, recentSongs, tubeRecent, onRepeat, forgotten, indie, records, tubeRecords, newest, yours, fresh, uploads) {
+        val taken = HashSet<String>()
+        val m = HashMap<String, List<Any?>>()
+        for (k in order) when (k) {
+            "fromYours" -> m[k] = Unique.shelf(fromYoursNow, taken, { Unique.of(it) }, perArtist = true) { it.pick.artist }
+            "forYou" -> m[k] = Unique.shelf(forYou, taken, { Unique.of(it.item) }, perArtist = true) { it.item.pick.artist }
+            "jumpBack" -> { m[k] = Unique.shelf(recentSongs, taken, { Unique.of(it) }) { it.artist }; m["jumpBackTube"] = Unique.shelf(tubeRecent, taken, { Unique.of(it) }) { it.artist } }
+            "onRepeat" -> m[k] = Unique.shelf(onRepeat, taken, { Unique.of(it) }) { it.artist }
+            "forgotten" -> m[k] = Unique.shelf(forgotten, taken, { Unique.of(it) }) { it.artist }
+            "indie" -> m[k] = Unique.shelf(indie, taken, { e -> e.song?.let { Unique.of(it) } ?: Unique.record(null, e.artist, e.title) }) { it.artist }
+            "uploads" -> m[k] = Unique.shelf(uploads, taken, { Unique.of(it) }) { it.artist }
+            "fresh" -> m[k] = Unique.shelf(fresh, taken, { Unique.of(it) }) { it.artist }
+            "tubeRecords" -> m[k] = Unique.shelf(tubeRecords, taken, { Unique.of(it) }) { it.artist }
+            "records" -> m[k] = Unique.shelf(records, taken, { Unique.of(it) }) { it.artist }
+            "newest" -> m[k] = Unique.shelf(newest, taken, { Unique.of(it) }) { it.artist }
+            "yours" -> m[k] = Unique.shelf(yours, taken, { Unique.of(it) }) { it.artist }
+        }
+        m
+    }
+    @Suppress("UNCHECKED_CAST") fun <T> one(k: String): List<T> = (one[k] ?: emptyList<Any?>()) as List<T>
+    val uFromYours = one<Picks.Shown>("fromYours"); val uForYou = one<ForYou.Placed<Picks.Shown>>("forYou")
+    val uRecent = one<Song>("jumpBack"); val uTubeRecent = one<Song>("jumpBackTube")
+    val uOnRepeat = one<Song>("onRepeat"); val uForgotten = one<Song>("forgotten"); val uIndie = one<IndieChart.Entry>("indie")
+    val uUploads = one<Song>("uploads"); val uFresh = one<TubeAlbum>("fresh"); val uTubeRecords = one<TubeAlbum>("tubeRecords")
+    val uRecords = one<TubeAlbum>("records"); val uNewest = one<Album>("newest"); val uYours = one<Album>("yours")
+    val sections = LinkedHashMap<String, @Composable () -> Unit>()
+    // their new music videos (MusicVideos, the full build's), once some are found
+    val videosAll by MusicVideos.clips.collectAsState()
+    val videos = videosAll.unblocked { it.title to it.artist }
+    LaunchedEffect(Unit) { MusicVideos.start(ctx) }
+    if (videos.isNotEmpty()) sections["videos"] = { NewVideosShelf(videos, pages) }
+    // monday finds and friday drops: your two weekly lists from Spotify, in ink's words (Finds), each till the next
+    val finds by Finds.weeks.collectAsState()
+    finds[Finds.Kind.MONDAY]?.let { w -> sections["monday"] = { FindsShelf(Finds.Kind.MONDAY, w) } }
+    finds[Finds.Kind.FRIDAY]?.let { w -> sections["friday"] = { FindsShelf(Finds.Kind.FRIDAY, w) } }
+    // what you liked on TUNER (2026-11-18), newest first: each its video's frame, a tap plays the song
+    val tunedLikes = remember(Listen.visit) { Fresh.tuned?.liked().orEmpty().take(16) }
+    if (tunedLikes.isNotEmpty()) sections["tuner"] = { FoundOnTuner(tunedLikes, pages) }
+    // live DJ sets from four channels that film them (LiveSets, the full build's)
+    LaunchedEffect(Unit) { LiveSets.start(ctx) }
+    // new from your artists: out this week or picked lately, by artists you play (where ink weekly was: it's INK's cover now)
+    if (uFromYours.isNotEmpty()) sections["fromYours"] = {
+        Heading("new from your artists")
+        Shelf(uFromYours) { s ->
+            val art by androidx.compose.runtime.produceState(s.art, s) { value = Picks.artOf(s, s.pick.record) }
+            PickTile(remember(s, art) { s.copy(pick = s.pick.copy(art = art), art = art) }, pages)
+        }
+    }
+    // three of every ten from INK: the critics' and djs' picks, near your taste first, a stretch now and then
+    if (uForYou.isNotEmpty()) sections["forYou"] = {
+        Heading("picked for you", "by critics and djs")
+        Shelf(uForYou) { p ->
+            val s = p.item
+            val art by androidx.compose.runtime.produceState(s.art, s) { value = Picks.artOf(s, s.pick.record) }
+            PickTile(remember(s, art) { s.copy(pick = s.pick.copy(art = art), art = art) }, pages, Fresh.reason(s, p.stretch, taste), near = !p.stretch)
+        }
+    }
+    // made from your listening (Discover): fresh finds, deep cuts and the rest
+    sections["madeForYou"] = { MadeForYouShelf() }
+    if (uRecent.isNotEmpty() || uTubeRecent.isNotEmpty()) sections["jumpBack"] = {
+        Label("jump back in")
+        LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            // the library's songs only, found first: one skipped inside the row left its gap, pushing the row right
+            items(uRecent) { s ->
+                Tile(s, s.album.ifEmpty { s.title }, s.artist) {
+                    val record = albums.firstOrNull { it.id == s.albumId }
+                    if (record != null) pages.open(Page.Record(record.id)) else Playback.play(listOf(s), 0)
+                }
+            }
+            // youtube music's: played from there on, back through what you played before it
+            itemsIndexed(uTubeRecent) { i, s -> Tile(s, s.title, s.artist) { Playback.play(uTubeRecent, i) } }
+        }
+        Spacer(Modifier.height(10.dp))
+    }
+    if (online && keptRecords.isNotEmpty()) sections["kept"] = { KeptShelf(keptRecords, "kept on this ${Device.word}", pages) }
+    // the shows you follow, their newest episodes not yet heard through: a tap plays from where you stopped
+    if (episodes.isNotEmpty()) sections["episodes"] = {
+        Label("new episodes")
+        LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            items(episodes.take(10), key = { it.id }) { e -> Tile(e, e.title, e.album) { Playback.play(listOf(e), 0) } }
+        }
+        Spacer(Modifier.height(10.dp))
+    }
+    // youtube music's own mixes for you (signed in): supermix, discover, new release, replay
+    if (tubeMixes.isNotEmpty()) sections["tubeMixes"] = {
+        Label("your mixes on youtube music")
+        Shelf(tubeMixes) { l -> MixTile(l) { pages.open(Page.TubeList(l)) } }
+    }
+    if (mixes.isNotEmpty()) sections["mixes"] = {
+        Label("mixes for you")
+        Shelf(mixes) { a -> Tile(a.hit, a.name, "mix", face = a.face, dither = true) { scope.launch { Listen.mix(a.hit!!) } } }
+    }
+    // your own music at a tempo, from INK (2026-11-12): made from yours, so it's listen's
+    if (!Device.tv) sections["yourMix"] = { YourMix() }
+    sections["because"] = { BecauseYouLovedShelf() }
+    sections["newToYou"] = { NewToYouShelf(pages) }
+    if (uOnRepeat.size >= 3) sections["onRepeat"] = {
+        Label("on repeat")
+        ShelfIndexed(uOnRepeat) { i, s -> Tile(s, s.title, s.artist) { Playback.play(uOnRepeat, i) } }
+    }
+    // what your youtube music artists put out this year, newest first (none, no row)
+    if (uFresh.isNotEmpty()) sections["fresh"] = {
+        Label("new from your artists on youtube music")
+        Shelf(uFresh) { a -> TubeTile(a, Modifier.width(140.dp)) { pages.open(Page.Tube(a)) } }
+    }
+    if (uForgotten.size >= 4) sections["forgotten"] = {
+        Label("forgotten favorites")
+        ShelfIndexed(uForgotten) { i, s -> Tile(s, s.title, s.artist) { Playback.play(uForgotten, i) } }
+    }
+    // the songs you've uploaded to youtube music yourself (they play signed in)
+    if (uUploads.isNotEmpty()) sections["uploads"] = {
+        Label("your uploads on youtube music")
+        ShelfIndexed(uUploads) { i, s -> Tile(s, s.title, s.artist) { Playback.play(uUploads, i) } }
+    }
+    if (tubeLists.isNotEmpty()) sections["tubeLists"] = {
+        Label("your playlists")
+        Shelf(tubeLists) { l -> Tile(null, l.name, "playlist", face = l.art, dither = true) { pages.open(Page.TubeList(l)) } }
+    }
+    if (tubeArtists.isNotEmpty()) sections["tubeArtists"] = {
+        Label("your artists on youtube music")
+        Shelf(tubeArtists) { a -> Tile(null, a.name, "artist", face = a.face) { pages.open(Page.TubeArtist(a)) } }
+    }
+    if (uTubeRecords.isNotEmpty()) sections["tubeRecords"] = {
+        Label("your records on youtube music")
+        Shelf(uTubeRecords) { a -> TubeTile(a, Modifier.width(140.dp)) { pages.open(Page.Tube(a)) } }
+    }
+    if (uRecords.isNotEmpty()) sections["records"] = {
+        Label("from artists you love")
+        Shelf(uRecords) { a -> TubeTile(a, Modifier.width(140.dp)) { pages.open(Page.Tube(a)) } }
+    }
+    if (uNewest.isNotEmpty()) sections["newest"] = {
+        Label("new on your server")
+        Shelf(uNewest) { a -> RecordTile(a, Modifier.width(140.dp)) { pages.open(Page.Record(a.id)) } }
+    }
+    if (uYours.isNotEmpty()) sections["yours"] = {
+        Label("from your records")
+        Shelf(uYours) { a -> RecordTile(a, Modifier.width(140.dp)) { pages.open(Page.Record(a.id)) } }
+    }
+
+    // the shelves arrive in turn once, as ink music opens (a tab, not a page: its own time, kept for the run)
+    if (Listen.shownAt == 0L) Listen.shownAt = android.os.SystemClock.uptimeMillis()
+    androidx.compose.runtime.CompositionLocalProvider(LocalOpened provides Listen.shownAt) {
+    LazyColumn(state = state, contentPadding = PaddingValues(top = pad.calculateTopPadding(), bottom = pad.calculateBottomPadding())) {
+        item { Column(Modifier.cascade(0)) {
+            Row(Modifier.padding(horizontal = 20.dp).padding(top = 6.dp, bottom = 10.dp), verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f)) {
+                    BasicText(Listen.greeting(), style = headline(40.sp), maxLines = 2)
+                    BasicText(java.text.SimpleDateFormat("EEEE d MMMM", java.util.Locale.getDefault()).format(java.util.Date()).lowercase(),
+                        style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(top = 6.dp))
+                    // private listening on: said here, so it isn't left on unawares
+                    if (Private.on(ctx)) BasicText("private listening: nothing kept", style = pixel(12.sp), modifier = Modifier.padding(top = 4.dp))
+                }
+                Cog { pages.open(Page.Settings) }
+            }
+        }}
+        // a newer ink music (the full build: GitHub's), first after the greeting
+        update?.let { u -> item(key = "update") { Column(Modifier.cascade(1)) { UpdateCard(u) } } }
+        // a year in (or two...): your first song here, on the day (an easter egg)
+        firstHeard?.takeIf { Eggs.anniversary(it.at) > 0 }?.let { f -> item(key = "anniversary") { Column(Modifier.cascade(1)) { Anniversary(f) } } }
+        // what the computer was playing, to carry on with here (Sync)
+        continued?.let { o -> item(key = "continue") { Column(Modifier.cascade(1)) { ContinueHere(o) } } }
+        if (!online && keptRecords.isNotEmpty()) item { Column(Modifier.cascade(1)) { KeptShelf(keptRecords, "no data? no problem", pages) }}
+        // what's new since you were here, a line each (Fresh)
+        // knowing nothing of you yet (little played here, nothing brought in, no artists picked): your listening on
+        // Last.fm or ListenBrainz asked for, as the computer's listen does (2026-11-11); "not now" puts it away
+        if (YouTubeMusic.available && LastFm.available && brought.isEmpty() && heard.size < 40 && !knowMeShut)
+            item(key = "know-me") { Column(Modifier.cascade(1).padding(horizontal = 20.dp).padding(bottom = 14.dp)) { KnowMeCard { knowMeShut = true } } }
+        if (sinceLines.isNotEmpty()) item(key = "since") { Column(Modifier.cascade(1).moving(this)) { SinceYouWereHere(since, sinceLines) } }
+        // dialed in: the nine you go back to at this hour, on top (not one of the shelves the moment orders)
+        if (!Device.tv) item(key = "dialedIn") { Column(Modifier.cascade(1).padding(bottom = 10.dp)) { DialedInSheet(heard, ::songOf, pages) } }
+        // three ways in, small: charts, new releases, moods & genres (2026-11-17, Bronson)
+        if (!Device.tv) item(key = "doors") { Column(Modifier.cascade(1)) { Doors(pages) } }
+        // the shelves, in the moment's order (Fresh.order): each shown, and its taps counted, so the unopened sink
+        order.forEachIndexed { i, k ->
+            val body = sections[k] ?: return@forEachIndexed
+            item(key = k) { Column(Modifier.cascade(2 + i).moving(this).shelf(k)) { ShelfShown(k); body() } }
+        }
+    }
+    }
+}
+
+/**
+ * A kind of radio: no cover, so a word, as ink does where a word works: the genre big in the
+ * pixel face on black in a hairline frame, and a little equaliser of pixels that moves while it plays.
+ */
+@Composable
+internal fun RadioTile(word: String, on: Boolean, moving: Boolean, said: String? = null, onClick: () -> Unit) {
+    Column(Modifier.width(140.dp).clickable(remember { MutableInteractionSource() }, indication = null, onClick = felt(then = onClick))) {
+        Box(Modifier.fillMaxWidth().aspectRatio(1f).background(Ink.black).border(1.dp, if (on) Ink.mid else Ink.line)) {
+            BasicText(word, style = pixel(fit(word), if (on) Ink.ink else Ink.mid), maxLines = 4,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.TopStart).padding(14.dp))
+            Bars(on && moving, if (on) Ink.ink else Ink.dim, Modifier.align(Alignment.BottomStart).padding(14.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        BasicText(word.uppercase(), style = headline(15.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        BasicText(if (on) "on now" else said ?: "stations", style = pixel(12.sp, Ink.mid), maxLines = 1)
+    }
+}
+
+/** A station as a tile: its sleeve (framed, its rings moving while it plays), its name, where or what's on. */
+@Composable
+internal fun StationTile(station: Song, on: Boolean, moving: Boolean, said: String, onClick: () -> Unit) {
+    Column(Modifier.width(140.dp).clickable(remember { MutableInteractionSource() }, indication = null, onClick = felt(then = onClick))) {
+        StationCover(station, Modifier.fillMaxWidth().aspectRatio(1f), moving = on && moving)
+        Spacer(Modifier.height(8.dp))
+        BasicText(station.title.uppercase(), style = headline(15.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        BasicText(said.lowercase(), style = pixel(12.sp, if (on) Ink.ink else Ink.mid), maxLines = 1)
+    }
+}
+
+/**
+ * A tile's word as big as fits its 112 dp across (a Silkscreen letter is about 0.55 of its size
+ * wide), 26 sp at most: "classical" and "electronic" broke mid-word at 26. A station's long name wraps.
+ */
+private fun fit(word: String) = (112f / (word.substringBefore(' ').length * .55f)).coerceIn(16f, 26f).sp
+
+/** Seven bars of pixels, still at rest, rising and falling while the radio plays. */
+@Composable
+private fun Bars(moving: Boolean, colour: androidx.compose.ui.graphics.Color, modifier: Modifier) {
+    val rest = listOf(2, 4, 3, 5, 2, 4, 3)
+    val t = rememberInfiniteTransition(label = "bars")
+    val beat by t.animateFloat(0f, 1f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "beat")
+    Row(modifier.height(30.dp), horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.Bottom) {
+        rest.forEachIndexed { i, r ->
+            val h = if (!moving) r else 1 + ((kotlin.math.sin((beat * 2 + i * .37f) * kotlin.math.PI * 2).toFloat() + 1f) * 2.5f).toInt()
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) { repeat(h) { Box(Modifier.size(5.dp, 3.dp).background(colour)) } }
+        }
+    }
+}
+
+/**
+ * ink radio, all of it: each station's name, the line on it, its city and kind; a tap plays from
+ * there (next is the next station).
+ */
+@Composable
+fun InkRadioPage(pages: Pages) {
+    val ctx = LocalContext.current
+    val all = remember { Stations.curated(ctx) }
+    val now by Playback.now.collectAsState()
+    val list = pageList()
+    FrostedPage(onClose = { pages.close() }) { frost, top -> LazyColumn(
+        state = list,
+        modifier = Modifier.fillMaxSize().hazeSource(frost).windowInsetsPadding(bars.only(WindowInsetsSides.Horizontal)),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = top + 14.dp, bottom = LocalFoot.current + 24.dp),
+    ) {
+        item {
+            BasicText("INK RADIO", style = headline(44.sp))
+            Spacer(Modifier.height(8.dp))
+            BasicText("${all.size} stations chosen by hand: independent, listener-powered and community radio, from seattle to tbilisi",
+                style = pixel(12.sp, Ink.mid))
+            Spacer(Modifier.height(16.dp))
+            Row {
+                Word("play", pixel(14.sp), Modifier.padding(end = 26.dp), touch = 8.dp) { Playback.play(all.map { it.song }, 0) }
+                Word("shuffle", pixel(14.sp, Ink.mid), touch = 8.dp) { Playback.play(all.map { it.song }.shuffled(), 0) }
+            }
+            Spacer(Modifier.height(14.dp))
+        }
+        itemsIndexed(all, key = { _, st -> st.song.id }) { i, st ->
+            val on = now?.song?.id == st.song.id
+            Column(Modifier.fillMaxWidth().clickable(remember { MutableInteractionSource() }, indication = null,
+                onClick = felt { Playback.play(all.map { it.song }, i) }).padding(vertical = 10.dp)) {
+                BasicText(st.song.title.uppercase(), style = headline(22.sp, if (on || now == null) Ink.ink else Ink.mid), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (st.line.isNotEmpty()) BasicText(st.line, style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(top = 3.dp))
+                BasicText(if (on) "on now" else listOf(st.city, st.genre).filter { it.isNotEmpty() }.joinToString("   "),
+                    style = pixel(12.sp, if (on) Ink.ink else Ink.mid), modifier = Modifier.padding(top = 3.dp))
+            }
+        }
+    } }
+}
+
+/** A shelf: a row of tiles, sliding sideways, the page's margins at its ends. */
+@Composable
+internal fun <T> Shelf(items: List<T>, tile: @Composable (T) -> Unit) {
+    LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        items(items) { tile(it) }
+    }
+    Spacer(Modifier.height(10.dp))
+}
+
+@Composable
+internal fun <T> ShelfIndexed(items: List<T>, tile: @Composable (Int, T) -> Unit) {
+    LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        itemsIndexed(items) { i, it -> tile(i, it) }
+    }
+    Spacer(Modifier.height(10.dp))
+}
+
+/** Your server's records kept on the phone, as covers: each opens its page (and plays from the phone). */
+@Composable
+private fun KeptShelf(records: List<Album>, label: String, pages: Pages) {
+    Label(label)
+    LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        items(records, key = { it.id }) { a -> RecordTile(a, Modifier.width(140.dp)) { pages.open(Page.Record(a.id)) } }
+    }
+    Spacer(Modifier.height(10.dp))
+}
+
+/** A year of ink music (or more), on the day: the first song you played here, to play again. */
+@Composable
+private fun Anniversary(f: History.Heard) {
+    val years = Eggs.anniversary(f.at)
+    val song = remember(f) { Library.song(f.id) ?: Library.songs.value.firstOrNull { it.title.equals(f.title, true) && it.artist.equals(f.artist, true) } }
+    val day = remember(f) { java.text.SimpleDateFormat("d MMMM yyyy", java.util.Locale.ENGLISH).format(java.util.Date(f.at)).lowercase() }
+    Heading(if (years == 1) "a year of ink music" else "$years years of ink music", "the first song you played here, $day")
+    Row(Modifier.padding(horizontal = 20.dp).padding(bottom = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+        CoverOf(song, f.album.ifEmpty { f.title }, Modifier.size(80.dp))
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            BasicText(f.title.uppercase(), style = headline(22.sp), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            BasicText(f.artist.lowercase(), style = pixel(12.sp, Ink.mid))
+            song?.let { s -> Word("PLAY IT AGAIN", headline(14.sp), Modifier.padding(top = 4.dp), touch = 8.dp) { Playback.play(listOf(s), 0) } }
+        }
+    }
+}
+
+/** What the computer was playing: its cover, "on <computer>", the song; continue here (where it was), or not now. */
+@Composable
+private fun ContinueHere(o: SyncPhone.Offer) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(64.dp).clickable(remember { MutableInteractionSource() }, indication = null, onClick = felt { SyncPhone.take(o) })) {
+            CoverOf(o.song, o.song.album.ifEmpty { o.song.title }, Modifier.fillMaxSize())
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            BasicText((if (o.playing) "playing on " else "on ") + o.from, style = pixel(12.sp, Ink.mid), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            BasicText(o.song.title.uppercase(), style = headline(18.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row {
+                Word("CONTINUE HERE", headline(14.sp), Modifier.padding(end = 18.dp), touch = 8.dp) { SyncPhone.take(o) }
+                Word("not now", pixel(12.sp, Ink.mid), touch = 8.dp) { SyncPhone.dismissed.value = o.at }
+            }
+        }
+    }
+}
+
+/**
+ * One of YouTube Music's mixes (2026-11-17, Bronson's pick of four mocked): its lead artist's photo in black and white with
+ * grain ([Mono]), the mix's own mark big at its top left (its number as YouTube numbers it, SUPER, DISCOVER...:
+ * [TubeMixes.mark]) and its name along its foot, the artists under it. Ink's own mixes stay in the dither: dither says
+ * ink's, black and white says a photo.
+ */
+@Composable
+private fun MixTile(l: TubeList, onClick: () -> Unit) {
+    val lead = remember(l) { TubeMixes.lead(l.said) }
+    // their photo from their page (kept); none (yet), black under the words: never the mix's own picture, YouTube's
+    // lettering on it (2026-11-17, Bronson: YouTube's own lettering showed through under ink's)
+    // the flow made once per artist: made in the drawing, each redraw had begun a new read of their page (one artist
+    // read every second or so while listen was open, 2026-11-18)
+    val info by remember(lead) { if (lead.isNotEmpty()) YouTubeAccount.artist(lead) else kotlinx.coroutines.flow.flowOf(null) }.collectAsState(null)
+    val face = info?.photo?.let { photoSong(lead, it) }
+    val mark = remember(l) { TubeMixes.mark(l.name, l.art) }
+    Column(Modifier.width(140.dp).clickable(remember { MutableInteractionSource() }, indication = null, onClick = felt(then = onClick))) {
+        Box(Modifier.fillMaxWidth().aspectRatio(1f).background(Ink.black)) {
+            face?.let { Mono(it, Modifier.fillMaxSize()) }
+            BasicText(mark, style = headline(when { mark.length <= 2 -> 56.sp; mark.length <= 5 -> 30.sp; mark.length <= 7 -> 22.sp; else -> 18.sp }),
+                modifier = Modifier.padding(start = 8.dp, top = 6.dp))
+            BasicText(l.name.uppercase(), style = headline(14.sp), maxLines = 3, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.align(androidx.compose.ui.Alignment.BottomStart).padding(8.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        BasicText(l.said.ifEmpty { "mix" }.lowercase(), style = pixel(12.sp, Ink.mid), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** A tile: a cover (or an artist's photo), a name big, a word small; numbered on a chart. */
+@Composable
+internal fun Tile(song: Song?, name: String, said: String, face: String? = null, number: Int? = null, dither: Boolean = false, onClick: () -> Unit) {
+    // the whole song, not its id: one whose cover arrives later keeps its id (INK's club tracks stayed gray, found)
+    val shown = remember(song, face) { if (face != null) faceSong(name, face) else song }
+    Column(Modifier.width(140.dp).warmOnRest(song).clickable(remember { MutableInteractionSource() }, indication = null, onClick = felt(then = onClick))) {
+        // a mix or a playlist: its picture in the dither (YouTube's lettering on it made ink's)
+        if (dither && shown?.art != null) Covered(shown, Modifier.fillMaxWidth().aspectRatio(1f), px = 400)
+        else CoverOf(shown, name, Modifier.fillMaxWidth().aspectRatio(1f), px = TILE_PX)
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.Top) {
+            number?.let { BasicText("$it", style = pixel(12.sp, Ink.mid), modifier = Modifier.width(26.dp).padding(top = 2.dp)) }
+            UnderCover(name, said, pixel(12.sp, Ink.mid))
+        }
+    }
+}
+
+/** An artist's photo as a song-shaped face, so it loads and is kept as covers are. */
+fun faceSong(name: String, face: String, photo: Boolean = false) = Song(
+    id = (if (photo) "yphoto:" else "yface:") + name, uri = android.net.Uri.EMPTY, title = name, artist = name, album = name,
+    albumId = (if (photo) "photo:" else "face:") + name,
+    albumArtist = name, duration = 0, disc = 1, track = 0, year = 0, art = face,
+)
+
+
+/**
+ * Listen on a TV (2026-11-10, light for slow boxes, after Prism's TV): a greeting, then five rows of covers all one size,
+ * asked for at that size: jump back in, new from your artists, live DJ sets, ink radio and your records. No shelves
+ * coming and going by the hour, no moving covers, nothing animating while it scrolls.
+ */
+@Composable
+fun TvListenPage(pages: Pages, state: LazyListState) {
+    val ctx = LocalContext.current
+    val albums by Library.albums.collectAsState()
+    val seed by Order.seed.collectAsState()
+    val heard by androidx.compose.runtime.produceState<List<History.Heard>>(emptyList()) {
+        value = withContext(Dispatchers.IO) { History.read(ctx) }
+    }
+    val recent = remember(heard) { heard.asReversed().distinctBy { it.album.ifEmpty { it.id } }.take(12).mapNotNull { Library.song(it.id) } }
+    // youtube's history, none of the blocked (their listens count for nothing)
+    val tubeHeardAll by YouTubeAccount.history.collectAsState()
+    val blockedNow by Blocked.kept.collectAsState()
+    val tubeHeard = remember(tubeHeardAll, blockedNow) { tubeHeardAll.filter { !Blocked.hides(it) } }
+    val tubeRecent = remember(tubeHeard, recent) { val said = recent.map { it.id }.toSet(); tubeHeard.filter { it.id !in said }.distinctBy { it.album.ifEmpty { it.id } }.take(10) }
+    val listened by Listened.now.collectAsState()
+    val allSongs by Library.songs.collectAsState()
+    val pickedRecordsAll by Picks.records.collectAsState()
+    val pickedRecords = pickedRecordsAll.unblocked { it.pick.title to it.pick.artist }
+    val broughtIn by Fresh.brought.collectAsState()
+    val fromYours = remember(pickedRecords, listened, allSongs, broughtIn) { Picks.yours(listened, allSongs, broughtIn) }
+    LaunchedEffect(Unit) { LiveSets.start(ctx) }
+    val sets by LiveSets.clips.collectAsState()
+    val ink = remember { Stations.curated(ctx).sortedByDescending { it.star } }
+    val yours = remember(albums, seed) { Order.of(albums, seed) { it.id }.take(16) }
+    val now by Playback.now.collectAsState()
+    @Composable
+    fun Row(title: String, content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
+        Column(Modifier.padding(bottom = 26.dp)) {
+            BasicText(title.uppercase(), style = headline(20.sp), modifier = Modifier.padding(start = 20.dp, bottom = 10.dp))
+            LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(18.dp), content = content)
+        }
+    }
+    @Composable
+    fun Cover(song: Song?, name: String, said: String, first: Boolean = false, onClick: () -> Unit) {
+        Column(Modifier.width(TV_TILE).then(if (first) Modifier.bootFirst() else Modifier).clickable(remember { MutableInteractionSource() }, indication = null, onClick = felt(then = onClick))) {
+            CoverOf(song, name, Modifier.size(TV_TILE), px = 320)
+            Spacer(Modifier.height(8.dp))
+            UnderCover(name, said, pixel(12.sp, Ink.mid))
+        }
+    }
+    LazyColumn(state = state, contentPadding = PaddingValues(top = 6.dp, bottom = 40.dp)) {
+        item(key = "hello") {
+            BasicText(Listen.greeting(), style = headline(40.sp), modifier = Modifier.padding(start = 20.dp, bottom = 22.dp))
+        }
+        if (recent.isNotEmpty() || tubeRecent.isNotEmpty()) item(key = "back") {
+            Row("jump back in") {
+                itemsIndexed(recent, key = { _, s -> "r" + s.id }) { i, s ->
+                    Cover(s, s.album.ifEmpty { s.title }, s.artist, first = i == 0) {
+                        val record = albums.firstOrNull { it.id == s.albumId }
+                        if (record != null) pages.open(Page.Record(record.id)) else Playback.play(listOf(s), 0)
+                    }
+                }
+                itemsIndexed(tubeRecent, key = { _, s -> "t" + s.id }) { i, s -> Cover(s, s.title, s.artist, first = i == 0 && recent.isEmpty()) { Playback.play(tubeRecent, i) } }
+            }
+        }
+        if (fromYours.isNotEmpty()) item(key = "yours-new") {
+            Row("new from your artists") {
+                items(fromYours, key = { "n" + Curation.key(it.pick) }) { y ->
+                    Cover(y.face, y.pick.title, y.pick.artist) { pages.open(Page.Find); pages.query = "${y.pick.artist} ${y.pick.title}" }
+                }
+            }
+        }
+        if (sets.isNotEmpty()) item(key = "sets") {
+            Row("live dj sets") {
+                items(sets, key = { "s" + it.id }) { c ->
+                    Column(Modifier.width(TV_TILE * 16 / 9).clickable(remember { MutableInteractionSource() }, indication = null,
+                        onClick = felt { pages.open(Page.Watch(c, sets)) })) {
+                        ClipFrame(c, Modifier.width(TV_TILE * 16 / 9).height(TV_TILE))
+                        Spacer(Modifier.height(8.dp))
+                        UnderCover(c.title, "${c.artist}  ·  ${agoOf(c.at)}", pixel(12.sp, Ink.mid))
+                    }
+                }
+            }
+        }
+        if (ink.isNotEmpty()) item(key = "radio") {
+            Row("ink radio") {
+                itemsIndexed(ink, key = { _, st -> "i" + st.song.id }) { i, st ->
+                    val on = now?.song?.id == st.song.id
+                    Column(Modifier.width(TV_TILE).clickable(remember { MutableInteractionSource() }, indication = null,
+                        onClick = felt { Playback.play(ink.drop(i).map { it.song }, 0) })) {
+                        StationCover(st.song, Modifier.size(TV_TILE), moving = false)
+                        Spacer(Modifier.height(8.dp))
+                        UnderCover(st.song.title, if (on) "on now" else st.city, pixel(12.sp, Ink.mid))
+                    }
+                }
+            }
+        }
+        if (yours.isNotEmpty()) item(key = "records") {
+            Row("your records") {
+                items(yours, key = { "a" + it.id }) { a -> Cover(a.songs.firstOrNull(), a.title, a.artist) { pages.open(Page.Record(a.id)) } }
+            }
+        }
+    }
+}
+
+/** A TV row's covers: one size, for the sofa. */
+private val TV_TILE = 168.dp
+
+
+/** How many pixels a shelf's cover is read at: a TV's tiles at their own size (a 640 px read, four times the pixels, was memory and decoding a slow box hasn't got), a phone's as it was. */
+val TILE_PX: Int get() = if (Device.tv) 320 else 640
+
+
+/** Know me, on listen: your Last.fm or ListenBrainz name, your listening brought in ([Brought]); or not now, for good. */
+@Composable
+private fun KnowMeCard(shut: () -> Unit) {
+    val ctx = LocalContext.current
+    var where by remember { mutableStateOf("last.fm") }
+    var name by remember { mutableStateOf("") }
+    var bringing by remember { mutableStateOf(false) }
+    var said by remember { mutableStateOf<String?>(null) }
+    BasicText("DO YOU SCROBBLE?", style = headline(22.sp))
+    Spacer(Modifier.height(6.dp))
+    BasicText("your listening on last.fm or listenbrainz, brought in by your name, so ink music knows you from today. nothing's sent, no password",
+        style = pixel(12.sp, Ink.mid))
+    Spacer(Modifier.height(10.dp))
+    Row {
+        for (w in listOf("last.fm", "listenbrainz"))
+            Word(w, pixel(14.sp, if (where == w) Ink.ink else Ink.dim), Modifier.padding(end = 26.dp), touch = 8.dp) { where = w }
+    }
+    Spacer(Modifier.height(10.dp))
+    Field("your $where name", name, { name = it }, "", androidx.compose.ui.text.input.KeyboardType.Text)
+    said?.let { BasicText(it, style = pixel(12.sp, Ink.ink)); Spacer(Modifier.height(8.dp)) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Word(if (bringing) "BRINGING IT IN" else "BRING IT IN", headline(26.sp, if (name.isBlank() || bringing) Ink.dim else Ink.ink), Modifier.padding(end = 28.dp), touch = 8.dp) {
+            if (bringing || name.isBlank()) return@Word
+            bringing = true; said = null
+            Fresh.bringIn(ctx, name, brainz = where == "listenbrainz") { b -> bringing = false; if (b == null) said = "$where has no listening under that name" }
+        }
+        Word("not now", pixel(13.sp, Ink.mid), touch = 8.dp) { runCatching { java.io.File(ctx.filesDir, "know-me-shut").writeText("") }; shut() }
+    }
+}
+
+/** A week's monday finds or friday drops: its name, when it came out, play all, then its songs. */
+@Composable
+private fun FindsShelf(k: Finds.Kind, w: Finds.Week) {
+    Heading(k.title, "${k.line}. this one ${Finds.dated(k, w)}") {
+        Word("play all", pixel(13.sp), touch = 8.dp) { Playback.play(w.songs, 0) }
+    }
+    ShelfIndexed(w.songs) { i, s -> Tile(s, s.title, s.artist) { Playback.play(w.songs, i) } }
+}

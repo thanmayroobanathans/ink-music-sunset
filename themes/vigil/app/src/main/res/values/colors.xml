@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- VIGIL theme (an unofficial build): the colours the window and the widget share with Theme.kt's Ink -->
+<resources>
+    <color name="sunset_night">#08090C</color>
+    <color name="sunset_dusk">#151820</color>
+    <color name="sunset_ink">#E9E4D8</color>
+    <color name="sunset_ink_mid">#E6E3A23B</color>
+</resources>

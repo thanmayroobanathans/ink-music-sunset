@@ -1,17 +1,18 @@
-# Builds "Neon Coast": ink music 2.1.26, exactly as released (inkappdev/ink-music, tag v2.1.26),
-# with this repo's theme/ folder laid over it. The APK lands in two places:
-#   - this run's page, under Artifacts (a zip with the APK inside)
-#   - Releases, on the repo's front page (the APK itself: the easy one to open on a phone)
-# Runs on every push, or by hand: Actions > Build Neon Coast > Run workflow.
-# Then screenshots of it on an emulator go to a draft release (seen only by people with access to the repo).
-name: Build Neon Coast
+# Builds two editions of ink music 2.1.26, exactly as released (inkappdev/ink-music, tag v2.1.26), each with its
+# folder from themes/ laid over it:
+#   - Neon Coast (themes/neon-coast): Miami at night        -> neon-coast-2.1.26.apk, app.ink.music.sunset
+#   - Vigil      (themes/vigil):      a rainy city, midnight -> vigil-2.1.26.apk,      app.ink.music.vigil
+# Each APK lands under Releases (and this run's Artifacts). Then each is photographed on an emulator, the pictures
+# going to a draft release (seen only by people with access to the repo).
+# Runs on every push, or by hand: Actions > Build the editions > Run workflow.
+name: Build the editions
 
 on:
   push:
   workflow_dispatch:
 
 permissions:
-  contents: write   # to publish the APK as a release
+  contents: write   # to publish the APKs as releases
 
 concurrency:
   group: build-${{ github.ref }}
@@ -22,14 +23,23 @@ env:
 
 jobs:
   build:
+    name: build ${{ matrix.edition.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        edition:
+          - { id: neon-coast, name: Neon Coast }
+          - { id: vigil, name: Vigil }
     env:
-      # optional: your own signing key, so later builds install over this one (see README)
+      # optional: your own signing key, so later builds install over the last (see README)
       KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      EDITION: ${{ matrix.edition.id }}
+      EDITION_NAME: ${{ matrix.edition.name }}
     steps:
-      - name: Get the theme (this repo)
+      - name: Get the themes (this repo)
         uses: actions/checkout@v5
         with:
           path: theme-repo
@@ -41,9 +51,9 @@ jobs:
           ref: ${{ env.INK_TAG }}
           path: ink-music
 
-      - name: Lay the theme over it
+      - name: Lay the ${{ matrix.edition.name }} theme over it
         run: |
-          cp -rv theme-repo/theme/. ink-music/
+          cp -rv "theme-repo/themes/$EDITION/." ink-music/
           echo "--- changed from the official ${INK_TAG}:"
           git -C ink-music status --short
 
@@ -90,13 +100,13 @@ jobs:
       - name: Name it
         run: |
           mkdir out
-          cp ink-music/app/build/outputs/apk/full/release/*.apk "out/neon-coast-${INK_TAG#v}.apk"
+          cp ink-music/app/build/outputs/apk/full/release/*.apk "out/${EDITION}-${INK_TAG#v}.apk"
           ls -l out
 
       - name: Upload (Artifacts)
         uses: actions/upload-artifact@v4
         with:
-          name: neon-coast-apk
+          name: ${{ matrix.edition.id }}-apk
           path: out/*.apk
 
       - name: Publish (Releases)
@@ -104,18 +114,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="neon-coast-${INK_TAG#v}-build${GITHUB_RUN_NUMBER}"
+          tag="${EDITION}-${INK_TAG#v}-build${GITHUB_RUN_NUMBER}"
           gh release create "$tag" out/*.apk \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "Neon Coast ${INK_TAG#v} (build ${GITHUB_RUN_NUMBER})" \
-            --notes "ink music ${INK_TAG#v} built from the official source (inkappdev/ink-music, tag ${INK_TAG}) with this repo's NEON COAST theme. Unofficial. GPL-3.0: the source is ink music's at that tag plus this repo's theme/ folder."
+            --title "${EDITION_NAME} ${INK_TAG#v} (build ${GITHUB_RUN_NUMBER})" \
+            --notes "ink music ${INK_TAG#v} built from the official source (inkappdev/ink-music, tag ${INK_TAG}) with this repo's ${EDITION_NAME} theme (themes/${EDITION}). Unofficial. GPL-3.0: the source is ink music's at that tag plus that folder."
 
   screens:
-    # the built app on an emulator, photographed; never holds up the release
+    # each built app on an emulator, photographed; never holds up a release
+    name: screens ${{ matrix.edition.id }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 45
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        edition:
+          - { id: neon-coast, pkg: app.ink.music.sunset, home: cruise, settings: safehouse }
+          - { id: vigil, pkg: app.ink.music.vigil, home: the beat, settings: hideout }
+    env:
+      EDITION: ${{ matrix.edition.id }}
+      PKG: ${{ matrix.edition.pkg }}
+      HOME_WORD: ${{ matrix.edition.home }}
+      SETTINGS_WORD: ${{ matrix.edition.settings }}
     steps:
       - name: Get the script (this repo)
         uses: actions/checkout@v5
@@ -123,7 +145,7 @@ jobs:
       - name: Get the APK
         uses: actions/download-artifact@v4
         with:
-          name: neon-coast-apk
+          name: ${{ matrix.edition.id }}-apk
           path: apk
 
       - name: KVM for the emulator
@@ -137,7 +159,7 @@ jobs:
           command -v ffmpeg > /dev/null || { sudo apt-get update -q && sudo apt-get install -y -q ffmpeg; }
           mkdir -p music
           ffmpeg -loglevel error -f lavfi -i "sine=frequency=220:duration=240" -f lavfi -i "sine=frequency=330:duration=240" \
-            -filter_complex amix=inputs=2 -metadata title="Night Drive" -metadata artist="Neon Coast" -metadata album="After Dark" \
+            -filter_complex amix=inputs=2 -metadata title="Night Drive" -metadata artist="The Test Tones" -metadata album="After Dark" \
             -c:a libmp3lame -b:a 128k music/night-drive.mp3
 
       - name: Screens
@@ -156,6 +178,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls shots/*.png > /dev/null 2>&1 || { echo "no screenshots"; exit 0; }
-          gh release create "screens-build${GITHUB_RUN_NUMBER}" shots/*.png --draft \
+          gh release create "screens-${EDITION}-build${GITHUB_RUN_NUMBER}" shots/*.png --draft \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "Screens, build ${GITHUB_RUN_NUMBER}" --notes "The built app on an Android 14 emulator."
+            --title "Screens: ${EDITION}, build ${GITHUB_RUN_NUMBER}" --notes "The built app on an Android 14 emulator."

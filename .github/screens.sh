@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Screenshots of the built app on an emulator: install it, give it a song, tap through the welcome by the words on
 # screen, then the home page, the places menu, the tracks, the player and settings. Run inside the emulator step.
+# From the workflow: PKG (the app), HOME_WORD (its first place's name), SETTINGS_WORD (its name for settings).
 set -u
-PKG=app.ink.music.sunset
+PKG=${PKG:-app.ink.music.sunset}
+HOME_WORD=${HOME_WORD:-cruise}
+SETTINGS_WORD=${SETTINGS_WORD:-safehouse}
 OUT=shots
 mkdir -p "$OUT"
 
@@ -20,16 +23,22 @@ except Exception:
 def centre(n):
     a, b, c, d = map(int, re.findall(r'\d+', n.get('bounds', '[0,0][0,0]')))
     return (a + c) // 2, (b + d) // 2
+import os
+last = os.environ.get('PICK') == 'last'
 for want in sys.argv[1:]:
     w = want.lower()
     for exact in (True, False):
+        hits = []
         for n in nodes:
             for t in (n.get('text') or '', n.get('content-desc') or ''):
                 t = t.strip().lower()
                 if t and (t == w if exact else t.startswith(w)):
                     x, y = centre(n)
                     if x > 0 and y > 0:
-                        print(x, y); sys.exit(0)
+                        hits.append((x, y))
+        if hits:
+            x, y = max(hits, key=lambda h: h[1]) if last else hits[0]
+            print(x, y); sys.exit(0)
 sys.exit(1)
 PY
 }
@@ -46,20 +55,22 @@ adb shell am start -n "$PKG/app.ink.music.Main"
 shot 01-welcome 10
 # the welcome, step by step, till the places are there
 for i in $(seq 1 10); do
-  if find_text cruise > /dev/null; then break; fi
+  if find_text "$HOME_WORD" > /dev/null; then break; fi
   tap BEGIN NEXT skip DONE Allow "While using the app" || adb shell input keyevent KEYCODE_BACK
   shot "02-welcome-step$i" 4
 done
 shot 03-home 8
 # the places menu (the big words), from the place's word at the top
-tap cruise && shot 04-places-menu 3
+tap "$HOME_WORD" && shot 04-places-menu 3
 tap tracks && shot 05-tracks 5
 tap "night drive" && shot 06-playing 5
-tap "night drive" && shot 07-player 5
-adb shell input keyevent KEYCODE_BACK; sleep 2
-adb shell input keyevent KEYCODE_BACK; sleep 2
-tap tracks cruise records && sleep 2
-tap cruise tracks records && shot 08-menu-again 3
-tap "safehouse" && shot 09-settings 5
-adb shell input swipe 540 1800 540 600 400 && shot 10-settings-more 3
+# the player: from the mini player, the lowest "night drive" on screen
+PICK=last tap "night drive" && shot 07-player 6
+adb shell input swipe 160 480 160 160 300 && shot 08-player-more 3
+adb shell input keyevent KEYCODE_BACK; sleep 3
+shot 09-back 1
+# settings: the place's word at the top opens the menu; settings is at its foot
+tap tracks "$HOME_WORD" && shot 10-menu-again 3
+tap "$SETTINGS_WORD" && shot 11-settings 5
+adb shell input swipe 160 520 160 120 400 && shot 12-settings-more 3
 ls -l "$OUT"
