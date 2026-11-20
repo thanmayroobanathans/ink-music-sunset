@@ -151,9 +151,12 @@ if tap find; then
     at=$(find_text "the weeknd") && { x=${at% *}; y=$(( ${at#* } - 30 )); }
     echo "play at $x $y"; adb shell input tap $x $y
     sleep 30; shot 03d-song-playing 1
+    # another song (the next row down), then the first again from its start: read from the phone this time
+    adb shell input tap $x $((y + 168)); sleep 10
     adb shell input tap $x $y
-    sleep 12
-    adb logcat -d -s ink-cache:* ink-youtube:I | tail -60 > "$OUT/cache-log.txt"
+    sleep 12; shot 03e-song-again 1
+    adb logcat -d -s ink-cache:* ink-youtube:D | grep -v "^-" | tail -80 > "$OUT/cache-log.txt"
+    [ -s "$OUT/cache-log.txt" ] || echo "(nothing logged)" > "$OUT/cache-log.txt"
     grep -c "played from the phone" "$OUT/cache-log.txt" | sed 's/^/reads from the phone: /'
   fi
   adb shell input keyevent KEYCODE_BACK; sleep 1; adb shell input keyevent KEYCODE_BACK; sleep 2

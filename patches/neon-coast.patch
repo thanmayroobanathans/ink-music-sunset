@@ -1607,10 +1607,10 @@ index 01a113d..c41f010 100644
          canvas.save(); canvas.translate(pad, top); words.draw(canvas); canvas.restore()
 diff --git a/app/src/main/java/app/ink/music/StreamCache.kt b/app/src/main/java/app/ink/music/StreamCache.kt
 new file mode 100644
-index 0000000..7027373
+index 0000000..f019f08
 --- /dev/null
 +++ b/app/src/main/java/app/ink/music/StreamCache.kt
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,70 @@
 +package app.ink.music
 +
 +import android.content.Context
@@ -1654,11 +1654,11 @@ index 0000000..7027373
 +                }
 +                override fun onCacheIgnored(reason: Int) { android.util.Log.d("ink-cache", "passed by: $reason") }
 +            })
-+        return DataSource.Factory { Picking(cached.createDataSource(), upstream.createDataSource()) }
++        return DataSource.Factory { Picking(cached.createDataSource(), upstream.createDataSource()) { kept.cacheSpace } }
 +    }
 +
 +    /** Kept or not, a song at a time: YouTube Music's through the keeping, everything else straight. */
-+    private class Picking(private val kept: DataSource, private val straight: DataSource) : DataSource {
++    private class Picking(private val kept: DataSource, private val straight: DataSource, private val held: () -> Long) : DataSource {
 +        private var now: DataSource? = null
 +        override fun addTransferListener(transferListener: TransferListener) {
 +            kept.addTransferListener(transferListener); straight.addTransferListener(transferListener)
@@ -1671,7 +1671,14 @@ index 0000000..7027373
 +        override fun read(buffer: ByteArray, offset: Int, length: Int): Int = now?.read(buffer, offset, length) ?: C.RESULT_END_OF_INPUT
 +        override fun getUri(): Uri? = now?.uri
 +        override fun getResponseHeaders(): Map<String, List<String>> = now?.responseHeaders ?: emptyMap()
-+        override fun close() { try { now?.close() } finally { now = null } }
++        override fun close() {
++            val was = now
++            try { was?.close() } finally {
++                now = null
++                // how much is kept now, as each song's stream closes (the log says the keeping works)
++                if (was === kept) android.util.Log.d("ink-cache", "kept on the phone: ${held() shr 10} kB")
++            }
++        }
 +    }
 +}
 diff --git a/app/src/main/java/app/ink/music/SyncPhone.kt b/app/src/main/java/app/ink/music/SyncPhone.kt

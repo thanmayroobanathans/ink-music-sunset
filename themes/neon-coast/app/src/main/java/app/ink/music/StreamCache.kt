@@ -41,11 +41,11 @@ object StreamCache {
                 }
                 override fun onCacheIgnored(reason: Int) { android.util.Log.d("ink-cache", "passed by: $reason") }
             })
-        return DataSource.Factory { Picking(cached.createDataSource(), upstream.createDataSource()) }
+        return DataSource.Factory { Picking(cached.createDataSource(), upstream.createDataSource()) { kept.cacheSpace } }
     }
 
     /** Kept or not, a song at a time: YouTube Music's through the keeping, everything else straight. */
-    private class Picking(private val kept: DataSource, private val straight: DataSource) : DataSource {
+    private class Picking(private val kept: DataSource, private val straight: DataSource, private val held: () -> Long) : DataSource {
         private var now: DataSource? = null
         override fun addTransferListener(transferListener: TransferListener) {
             kept.addTransferListener(transferListener); straight.addTransferListener(transferListener)
@@ -58,6 +58,13 @@ object StreamCache {
         override fun read(buffer: ByteArray, offset: Int, length: Int): Int = now?.read(buffer, offset, length) ?: C.RESULT_END_OF_INPUT
         override fun getUri(): Uri? = now?.uri
         override fun getResponseHeaders(): Map<String, List<String>> = now?.responseHeaders ?: emptyMap()
-        override fun close() { try { now?.close() } finally { now = null } }
+        override fun close() {
+            val was = now
+            try { was?.close() } finally {
+                now = null
+                // how much is kept now, as each song's stream closes (the log says the keeping works)
+                if (was === kept) android.util.Log.d("ink-cache", "kept on the phone: ${held() shr 10} kB")
+            }
+        }
     }
 }
