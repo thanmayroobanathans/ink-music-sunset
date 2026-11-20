@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SUNSET DRIVE theme (an unofficial build): the icon's monochrome (themed icons): the sun and its glints (made by make_icon.py) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M32.44,52 A23,23 0 0 1 75.56,52 Z M32.03,53.2 L75.97,53.2 A23,23 0 0 1 76.68,56.2 L31.32,56.2 A23,23 0 0 1 32.03,53.2 Z M31.11,57.8 L76.89,57.8 A23,23 0 0 1 76.99,60.6 L31.01,60.6 A23,23 0 0 1 31.11,57.8 Z M31.15,62.6 L76.85,62.6 A23,23 0 0 1 76.45,65 L31.55,65 A23,23 0 0 1 31.15,62.6 Z M32.22,67.4 L75.78,67.4 A23,23 0 0 1 75.17,69 L32.83,69 A23,23 0 0 1 32.22,67.4 Z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M39,72 L69,72 L69,73.3 L39,73.3 Z M43.5,75.6 L64.5,75.6 L64.5,76.7 L43.5,76.7 Z M47.5,78.8 L60.5,78.8 L60.5,79.8 L47.5,79.8 Z M50.5,81.6 L57.5,81.6 L57.5,82.5 L50.5,82.5 Z" />
+</vector>

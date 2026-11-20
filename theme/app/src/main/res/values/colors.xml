@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SUNSET DRIVE theme (an unofficial build): the colours the window and the widget share with Theme.kt's Ink -->
+<resources>
+    <color name="sunset_night">#170A29</color>
+    <color name="sunset_dusk">#2A1442</color>
+    <color name="sunset_ink">#FFA6D2</color>
+    <color name="sunset_ink_mid">#8CFFA6D2</color>
+</resources>
