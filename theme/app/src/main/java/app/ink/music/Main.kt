@@ -195,7 +195,8 @@ class Main : ComponentActivity() {
         Hints.start(this)
         SetHeard.start(this)
         Stations.curated(this)
-        setContent { TvFocus { App() } }
+        // NEON COAST: the scanlines and the sunset glow drawn over the whole of the app
+        setContent { TvFocus { androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) { App(); NeonCoastOverlay(Modifier.fillMaxSize()) } } }
         // the next song's cover (and the last's) ready before it plays (Covers.ahead)
         lifecycleScope.launch { Covers.ahead(this@Main) }
         // the genres opened most, their editors' songs read ahead (their pages open with them there)
@@ -894,7 +895,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
                 verticalAlignment = Alignment.CenterVertically) {
                 androidx.compose.animation.AnimatedContent(tab, label = "place",
                     transitionSpec = { androidx.compose.animation.fadeIn(tween(Motion.ENTER, easing = Motion.expo)) togetherWith androidx.compose.animation.fadeOut(tween(Motion.EXIT)) },
-                ) { t -> BasicText(t.uppercase(), style = headline(26.sp)) }
+                ) { t -> BasicText(placeName(t).uppercase(), style = headline(26.sp)) }
                 Spacer(Modifier.width(10.dp))
                 // the menu's chevron: down while shut, up while open
                 val turn by androidx.compose.animation.core.animateFloatAsState(if (menu) 180f else 0f, tween(Motion.ENTER, easing = Motion.expo), label = "chevron")
@@ -922,7 +923,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
             }
             when (key) {
                 Hints.PULL -> Typed("pull down to find anything", pixel(12.sp, Ink.mid), hint)
-                Hints.PLACES -> Typed("tap ${tab.lowercase()} for every place", pixel(12.sp, Ink.mid), hint)
+                Hints.PLACES -> Typed("tap ${placeName(tab)} for every place", pixel(12.sp, Ink.mid), hint)
                 Hints.ACROSS -> Typed("swipe across for the place beside", pixel(12.sp, Ink.mid), hint)
                 Hints.TURN -> Typed("turn your phone sideways for a wall of covers", pixel(12.sp, Ink.mid), hint)
                 Hints.ORDER -> Typed("tap an order to change it: year, color, lately", pixel(12.sp, Ink.mid), hint)
@@ -934,6 +935,8 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
             }
         }
       }
+      // NEON COAST: the sunset drawn as a line under the bar
+      Box(Modifier.fillMaxWidth().height(2.dp).background(Sunset))
       Box(Modifier.fillMaxWidth().height(BAND).softEdge(tabsFrost, towardBottom = false))
     }
     // the places, dropped down under the word: big, the one you're on lit, each arriving in turn; a tap goes there (on
@@ -954,14 +957,14 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
         ) {
             tabs.forEachIndexed { i, t ->
                 // a TV's screen is short: the places a size smaller, so all of them and settings sit above the mini player
-                Word(t.uppercase(), headline(if (tv) 32.sp else 48.sp, if (t == tab) Ink.ink else Ink.mid), Modifier.arrive(i, menu).then(if (t == tab) Modifier.tvFirst() else Modifier), touch = 4.dp) {
+                Word(placeName(t).uppercase(), headline(if (tv) 32.sp else 48.sp, if (t == tab) Ink.ink else Ink.mid), Modifier.arrive(i, menu).then(if (t == tab) Modifier.tvFirst() else Modifier), touch = 4.dp) {
                     menu = false
                     if (tv) tab = t
                     else scope.launch { pager.animateScrollToPage(i, animationSpec = tween(Motion.ENTER, easing = Motion.expo)) }
                 }
             }
             Spacer(Modifier.height(24.dp))
-            Word("settings", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size, menu), touch = 8.dp) { menu = false; pages.open(Page.Settings) }
+            Word("safehouse (settings)", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size, menu), touch = 8.dp) { menu = false; pages.open(Page.Settings) }
             Word("your year", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size + 1, menu), touch = 8.dp) { menu = false; pages.open(Page.Year) }
             Word("ink mapped", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size + 2, menu), touch = 8.dp) { menu = false; pages.open(Page.Mapped) }
             // pairing a computer a tap from anywhere, not deep in settings; once one's paired, its name opens its setting

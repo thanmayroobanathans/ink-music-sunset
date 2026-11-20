@@ -220,9 +220,11 @@ private object Drawn {
 fun Word(text: String, style: androidx.compose.ui.text.TextStyle, modifier: Modifier = Modifier, touch: Dp = 0.dp, onClick: () -> Unit) {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
-    val c by animateColorAsState(if (pressed) Ink.mid else style.color, tween(Motion.FADE), label = "word")
+    // a headline lit with the sunset has no one colour: it keeps its brush, and only while held turns the teal
+    val solid = style.brush == null
+    val c by animateColorAsState(if (pressed) Ink.mid else if (solid) style.color else Ink.ink, tween(Motion.FADE), label = "word")
     BasicText(
-        text, style = style.copy(color = c), maxLines = 1, overflow = TextOverflow.Ellipsis,
+        text, style = if (solid || pressed) style.copy(color = c) else style, maxLines = 1, overflow = TextOverflow.Ellipsis,
         modifier = modifier.clickable(src, indication = null, onClick = felt(then = onClick)).padding(vertical = touch, horizontal = touch / 2),
     )
 }

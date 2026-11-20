@@ -1,4 +1,4 @@
-"""Sunset Drive launcher icon for the themed ink music build.
+"""Neon Coast launcher icon for the themed ink music build.
 
 One drawing, emitted three ways: an SVG (for previews) and Android vector drawables for the
 adaptive icon's background (sky), foreground (sun, sea, palms) and monochrome (sun and sea only).
@@ -16,11 +16,11 @@ os.makedirs(OUT, exist_ok=True)
 W = 108
 CX, CY, R = 54.0, 60.0, 23.0        # the sun
 HORIZON = 69.0                      # where the sea starts
-SKY = [(0.00, "#170A29"), (0.45, "#4A1766"), (0.78, "#B8327F"), (1.00, "#FF6F7D")]
-SUN = [(0.00, "#FFE27A"), (0.45, "#FF9A4A"), (1.00, "#FF3D7F")]
-SEA = "#170A29"
+SKY = [(0.00, "#0F0820"), (0.45, "#3B1466"), (0.78, "#C2307F"), (1.00, "#FF7A59")]
+SUN = [(0.00, "#FFE066"), (0.45, "#FF8A4D"), (1.00, "#FF3EA5")]
+SEA = "#0F0820"
 PALM = "#0E0519"
-GLINT = "#FF8FC4"
+GLINT = "#4FF0E0"
 
 
 def f(x):
@@ -127,7 +127,7 @@ def vd_grad(stops, y1, y2):
 
 
 HEAD = '''<?xml version="1.0" encoding="utf-8"?>
-<!-- SUNSET DRIVE theme (an unofficial build): {what} (made by make_icon.py) -->
+<!-- NEON COAST theme (an unofficial build): {what} (made by make_icon.py) -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp"

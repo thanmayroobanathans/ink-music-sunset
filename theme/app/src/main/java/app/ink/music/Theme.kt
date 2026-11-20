@@ -46,36 +46,94 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 
 // The look: black, warm white ink, brightness for selection, album art the only colour.
-// SUNSET DRIVE theme (an unofficial build): the black is a night violet and the ink a sunset pink;
-// everything else (brightness for selection, album art the only other colour) is as it was.
+// NEON COAST theme (an unofficial build): a Miami-at-night look. Midnight for the black, neon pink for the ink,
+// neon teal for what's secondary, every headline lit like a sunset and glowing; scanlines over it all.
 object Ink {
-    val black = Color(0xFF170A29)                 // night violet (was Color.Black)
+    val black = Color(0xFF0F0820)                 // midnight (was Color.Black)
     /** [black] as an ARGB int, for pictures drawn pixel by pixel (the dither's off dots). */
-    const val blackArgb: Int = 0xFF170A29.toInt()
-    val ink = Color(0xFFFFA6D2)                   // sunset pink (was 0xFFF1F0EC, warm white)
+    const val blackArgb: Int = 0xFF0F0820.toInt()
+    val ink = Color(0xFFFF6FB5)                   // neon pink (was 0xFFF1F0EC, warm white)
+    /** The second neon: what's secondary is teal, not the ink dimmed. */
+    val teal = Color(0xFF4FF0E0)
     /** Bright light (the light sensor: sunlight): the dim words a step brighter, so they read outdoors. */
     var sun by androidx.compose.runtime.mutableStateOf(false)
-    // 55% and 17% till 2026-10-27: the off words couldn't be read outside
-    val mid get() = ink.copy(alpha = if (sun) .85f else .70f)   // hover / secondary
-    val dim get() = ink.copy(alpha = if (sun) .55f else .35f)   // unselected
-    val line = ink.copy(alpha = .12f)  // hairlines
-    val plate = Color(0xFF2A1442)                 // dusk violet (was 0xFF141414)
+    val mid get() = teal.copy(alpha = if (sun) 1f else .86f)    // hover / secondary: teal
+    val dim get() = ink.copy(alpha = if (sun) .62f else .44f)   // unselected
+    val line = teal.copy(alpha = .22f)  // hairlines, teal
+    val plate = Color(0xFF221238)                 // dusk (was 0xFF141414)
 }
 
-// Two fonts, never a third: Archivo Black UPPERCASE, Silkscreen lowercase.
+/** The sunset every headline in the ink is lit with, left to right: hot pink, coral, gold. */
+val Sunset: androidx.compose.ui.graphics.Brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+    listOf(Color(0xFFFF3EA5), Color(0xFFFF7A59), Color(0xFFFFC94D)),
+)
+private val Glow = Color(0xFFFF3EA5)
+
+// Two fonts, never a third: Anton UPPERCASE (in archivo_black.ttf's place), Chakra Petch lowercase (in silkscreen.ttf's).
+// Both SIL Open Font License; the names kept so every use of them (the widget, the share cards) follows.
 val Archivo = FontFamily(Font(R.font.archivo_black))
 val Pixel = FontFamily(Font(R.font.silkscreen))
 
 private val tight = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both)
 
-fun headline(size: TextUnit, color: Color = Ink.ink) = TextStyle(
-    fontFamily = Archivo, fontSize = size, color = color,
-    letterSpacing = (-0.02).em, lineHeight = 0.95.em, lineHeightStyle = tight,
-)
+/**
+ * A headline. In the ink it's lit with the [Sunset] and glows pink; in any other colour it's that colour with a
+ * faint glow of it. No glow when the phone moves less (a glow is a blur, each time the words are drawn).
+ */
+fun headline(size: TextUnit, color: Color = Ink.ink): TextStyle {
+    val lit = color == Ink.ink
+    val glow = if (Moves.less.value) null else androidx.compose.ui.graphics.Shadow(
+        color = if (lit) Glow.copy(alpha = .7f) else color.copy(alpha = color.alpha * .45f),
+        offset = Offset.Zero,
+        blurRadius = (size.value * .7f).coerceIn(6f, 60f),
+    )
+    return if (lit) TextStyle(
+        brush = Sunset, fontFamily = Archivo, fontSize = size, shadow = glow,
+        letterSpacing = 0.015.em, lineHeight = 1.0.em, lineHeightStyle = tight,
+    ) else TextStyle(
+        color = color, fontFamily = Archivo, fontSize = size, shadow = glow,
+        letterSpacing = 0.015.em, lineHeight = 1.0.em, lineHeightStyle = tight,
+    )
+}
 
 fun pixel(size: TextUnit, color: Color = Ink.ink) = TextStyle(
-    fontFamily = Pixel, fontSize = readable(size), color = color, lineHeight = 1.4.em,
+    fontFamily = Pixel, fontSize = readable(size), color = color, lineHeight = 1.4.em, letterSpacing = 0.03.em,
 )
+
+/** NEON COAST's names for ink music's places: only the words shown change, never the places' own keys. */
+fun placeName(key: String): String = when (key) {
+    "listen" -> "cruise"
+    "ink" -> "the scene"
+    "albums" -> "records"
+    "artists" -> "crews"
+    "songs" -> "tracks"
+    "radio" -> "airwaves"
+    "podcasts" -> "talk radio"
+    "lists" -> "mixtapes"
+    else -> key
+}
+
+/**
+ * NEON COAST over everything: a tape's scanlines, and the sunset's glow low on the screen. It only draws (nothing
+ * under it loses a touch), in a layer of its own, so it's drawn again only when the screen's size changes.
+ */
+@Composable
+fun NeonCoastOverlay(modifier: Modifier) {
+    Canvas(modifier.graphicsLayer { }) {
+        val h = size.height
+        val w = size.width
+        drawRect(
+            androidx.compose.ui.graphics.Brush.verticalGradient(
+                0f to Color.Transparent, .78f to Color.Transparent, 1f to Glow.copy(alpha = .13f),
+                startY = 0f, endY = h,
+            ),
+        )
+        val step = 4.dp.toPx().coerceAtLeast(3f)
+        val dark = Color.Black.copy(alpha = .10f)
+        var y = 0f
+        while (y < h) { drawLine(dark, Offset(0f, y), Offset(w, y), strokeWidth = 1f); y += step }
+    }
+}
 
 /**
  * Silkscreen's pixels blur together below 12 sp (2026-10-25: the small words were hard to
@@ -163,7 +221,8 @@ fun FadeText(
     // Laid out once; while it fades only the drawing changes: each word drawn in its own colour
     // through a clip around it (rebuilding styled text every frame cost the onn a frame a frame)
     val laid = remember { arrayOfNulls<TextLayoutResult>(1) }
-    val base = style.color
+    val lit = style.brush   // a headline in the ink: the sunset, faded in as itself
+    val base = if (style.color != Color.Unspecified) style.color else Ink.ink
     val reach = with(LocalDensity.current) { (if (style.fontSize.isSp) style.fontSize.toPx() else 16f) * .25f }
     BasicText(
         text,
@@ -185,7 +244,10 @@ fun FadeText(
                     val x0 = l.getHorizontalPosition(s0, true)
                     val x1 = l.getHorizontalPosition(e0, true)
                     clipRect(minOf(x0, x1) - reach, l.getLineTop(line), maxOf(x0, x1) + reach, l.getLineBottom(line)) {
-                        drawText(l, color = c)
+                        if (lit != null) {
+                            if (from != null) drawText(l, color = from)
+                            drawText(l, brush = lit, alpha = a)
+                        } else drawText(l, color = c)
                     }
                 }
             }

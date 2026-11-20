@@ -21,7 +21,7 @@ enum class Print(val word: String) {
 /** The looks' pixels, from a cover drawn `n` x `n` (ARGB, smoothly scaled), one dot a pixel; `frames` steps of it developing. */
 object Prints {
     private const val BLACK = 0xFF000000.toInt()
-    private const val NIGHT = 0xFF170A29.toInt()   // the sunset theme's night violet: what's drawn on
+    private const val NIGHT = 0xFF0F0820.toInt()   // NEON COAST's midnight: what's drawn on
 
     /**
      * A photo in black and white (2026-11-17, Bronson: "high contrast black and white with grain and then the nice text

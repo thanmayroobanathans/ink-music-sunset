@@ -39,7 +39,7 @@
             android:ellipsize="end"
             android:includeFontPadding="false"
             android:letterSpacing="-0.02"
-            android:text="INK MUSIC" />
+            android:text="NEON COAST" />
 
         <TextView
             android:id="@+id/artist"

@@ -22,7 +22,7 @@
     <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
 
     <application
-        android:label="ink sunset"
+        android:label="Neon Coast"
         android:icon="@mipmap/icon"
         android:roundIcon="@mipmap/icon"
         android:banner="@drawable/banner"
@@ -106,7 +106,7 @@
         <receiver
             android:name=".Widget"
             android:process=":player"
-            android:label="ink sunset"
+            android:label="Neon Coast"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />

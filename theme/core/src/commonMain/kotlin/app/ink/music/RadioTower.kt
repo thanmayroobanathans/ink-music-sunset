@@ -17,7 +17,7 @@ object RadioTower {
     const val FRAMES = 8
     private val BAYER = intArrayOf(0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5)
     private const val BLACK = 0xFF000000.toInt()
-    private const val NIGHT = 0xFF170A29.toInt()   // the sunset theme's night violet: what's drawn on
+    private const val NIGHT = 0xFF0F0820.toInt()   // NEON COAST's midnight: what's drawn on
 
     /** The banner `w` x `h` dots: the tower at `at` across (0 to 1), its tip a fifth down, the rings round the tip in `dot`. */
     fun pixels(w: Int, h: Int, at: Float, frame: Int, ink: Int, dot: Int, bolts: Boolean = false): IntArray {

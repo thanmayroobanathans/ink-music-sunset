@@ -1,9 +1,10 @@
-# Builds "ink sunset": ink music 2.1.26, exactly as released (inkappdev/ink-music, tag v2.1.26),
+# Builds "Neon Coast": ink music 2.1.26, exactly as released (inkappdev/ink-music, tag v2.1.26),
 # with this repo's theme/ folder laid over it. The APK lands in two places:
 #   - this run's page, under Artifacts (a zip with the APK inside)
 #   - Releases, on the repo's front page (the APK itself: the easy one to open on a phone)
-# Runs on every push, or by hand: Actions > Build ink sunset > Run workflow.
-name: Build ink sunset
+# Runs on every push, or by hand: Actions > Build Neon Coast > Run workflow.
+# Then screenshots of it on an emulator go to a draft release (seen only by people with access to the repo).
+name: Build Neon Coast
 
 on:
   push:
@@ -89,13 +90,13 @@ jobs:
       - name: Name it
         run: |
           mkdir out
-          cp ink-music/app/build/outputs/apk/full/release/*.apk "out/ink-sunset-${INK_TAG#v}.apk"
+          cp ink-music/app/build/outputs/apk/full/release/*.apk "out/neon-coast-${INK_TAG#v}.apk"
           ls -l out
 
       - name: Upload (Artifacts)
         uses: actions/upload-artifact@v4
         with:
-          name: ink-sunset-apk
+          name: neon-coast-apk
           path: out/*.apk
 
       - name: Publish (Releases)
@@ -103,8 +104,58 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="sunset-${INK_TAG#v}-build${GITHUB_RUN_NUMBER}"
+          tag="neon-coast-${INK_TAG#v}-build${GITHUB_RUN_NUMBER}"
           gh release create "$tag" out/*.apk \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "ink sunset ${INK_TAG#v} (build ${GITHUB_RUN_NUMBER})" \
-            --notes "ink music ${INK_TAG#v} built from the official source (inkappdev/ink-music, tag ${INK_TAG}) with this repo's SUNSET DRIVE theme. Unofficial. GPL-3.0: the source is ink music's at that tag plus this repo's theme/ folder."
+            --title "Neon Coast ${INK_TAG#v} (build ${GITHUB_RUN_NUMBER})" \
+            --notes "ink music ${INK_TAG#v} built from the official source (inkappdev/ink-music, tag ${INK_TAG}) with this repo's NEON COAST theme. Unofficial. GPL-3.0: the source is ink music's at that tag plus this repo's theme/ folder."
+
+  screens:
+    # the built app on an emulator, photographed; never holds up the release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - name: Get the script (this repo)
+        uses: actions/checkout@v5
+
+      - name: Get the APK
+        uses: actions/download-artifact@v4
+        with:
+          name: neon-coast-apk
+          path: apk
+
+      - name: KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: A song to play (two tones, made here)
+        run: |
+          command -v ffmpeg > /dev/null || { sudo apt-get update -q && sudo apt-get install -y -q ffmpeg; }
+          mkdir -p music
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=220:duration=240" -f lavfi -i "sine=frequency=330:duration=240" \
+            -filter_complex amix=inputs=2 -metadata title="Night Drive" -metadata artist="Neon Coast" -metadata album="After Dark" \
+            -c:a libmp3lame -b:a 128k music/night-drive.mp3
+
+      - name: Screens
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash .github/screens.sh
+
+      - name: Screens to a draft release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls shots/*.png > /dev/null 2>&1 || { echo "no screenshots"; exit 0; }
+          gh release create "screens-build${GITHUB_RUN_NUMBER}" shots/*.png --draft \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Screens, build ${GITHUB_RUN_NUMBER}" --notes "The built app on an Android 14 emulator."

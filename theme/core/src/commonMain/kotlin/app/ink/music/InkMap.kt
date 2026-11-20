@@ -231,8 +231,8 @@ object InkMap {
     }
 
     private const val BLACK = 0xFF000000.toInt()
-    private const val NIGHT = 0xFF170A29.toInt()   // the sunset theme's night violet: what's drawn on
-    // a line's colour at k of its full strength, faded towards the night violet it's drawn on (was towards black)
+    private const val NIGHT = 0xFF0F0820.toInt()   // NEON COAST's midnight: what's drawn on
+    // a line's colour at k of its full strength, faded towards the midnight it's drawn on (was towards black)
     private fun shade(c: Int, k: Float) = BLACK or (towards(NIGHT shr 16 and 255, c shr 16 and 255, k) shl 16) or (towards(NIGHT shr 8 and 255, c shr 8 and 255, k) shl 8) or towards(NIGHT and 255, c and 255, k)
     private fun towards(from: Int, to: Int, k: Float) = (from + (to - from) * k).toInt()
 }
