@@ -121,7 +121,7 @@ object TubeVideos {
 
     /**
      * A video by its title (the editions', 2026-11-21: a Spotify playlist of local files, videos' sound saved as files, came in with no
-     * artist, a file's "_" for a "|", and none of 48 was found): the first of youtube.com's answers with the title's
+     * artist, a file's "_" for a "|", and none of 48 was found): the closest of youtube.com's answers with the title's
      * words in its own, any length. Three in four of them with no artist said; with one, three in five and the artist
      * in its channel or its title. A one-word title with no artist only for a title of a few words, near the same.
      */
@@ -132,7 +132,7 @@ object TubeVideos {
         val q = (if (artist.isBlank()) "" else "$artist ") + title.replace('_', ' ')
         // of those near enough, the closest (the same video, where it's there, over another of the same day's racing
         // a place above it): the most words in common for all the words of the two; the higher answer on a tie
-        return search(q, 10).mapIndexedNotNull { i, f ->
+        fun closest(found: List<Found>) = found.mapIndexedNotNull { i, f ->
             val got = words(f.title)
             val both = want.count { it in got }
             val share = both / want.size.toFloat()
@@ -140,6 +140,9 @@ object TubeVideos {
                 else share >= .6f && (plain(f.channel).let { c -> c.isNotEmpty() && (c.contains(by) || by.contains(c)) } || plain(f.title).contains(by))
             if (near) Triple(f, both / (want + got).size.toFloat(), i) else null
         }.maxWithOrNull(compareBy<Triple<Found, Float, Int>> { it.second }.thenByDescending { it.third })?.first
+        // none near: asked once more, its words alone, for more answers (a search turned away now and then, eight at a
+        // time; and a title's "!" and "|" can change what comes)
+        return closest(search(q, 10)) ?: closest(search((if (artist.isBlank()) "" else "$artist ") + want.joinToString(" "), 20))
     }
 
     private fun words(s: String) = s.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }.toSet()
