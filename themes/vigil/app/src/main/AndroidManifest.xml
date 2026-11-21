@@ -28,7 +28,11 @@
         android:banner="@drawable/banner"
         android:theme="@style/Ink"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="true"
+        android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_rules">
+        <!-- Android's own backup keeps your data (not what's fetched again): res/xml/data_rules.xml -->
         <!-- cleartext: a server at home is usually plain http on the wifi (or a tailnet) -->
 
         <!-- singleTop, not singleTask: opened again from the home screen, the task comes back as it

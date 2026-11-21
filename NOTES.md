@@ -1,5 +1,4 @@
-- Steer your phone from your laptop, and your laptop from your phone: play, pause, skip, jump to a point, the volume, any song in the queue
-- What plays on the other one shows here, whatever plays where
-- Songs from YouTube Music kept on the phone as they play: played again, they start at once, seek at once and cost no data
-- Spotify playlists through Exportify, a whole "export all" zip too
-- The app for Windows: on the website
+- Your listening history, searches, likes, playlists and settings now survive an uninstall or a new phone: backed up to Downloads every two days, and by Android's own backup too. Settings → Listening → Your data to back up now or restore
+- Smoother: pages glide in on a spring, the player rises from the bottom like a sheet and drops back down
+- Vigil: darker, with a red light low on the street, heavier rain and fine grain
+- This update installs over the last one, nothing lost

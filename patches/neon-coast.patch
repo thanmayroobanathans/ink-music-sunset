@@ -610,10 +610,10 @@ index 10e2758..ef7a9fe 100644
      }
  
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
-index bdad89d..fa01e5a 100644
+index bdad89d..9044aa8 100644
 --- a/app/src/main/AndroidManifest.xml
 +++ b/app/src/main/AndroidManifest.xml
-@@ -22,7 +22,7 @@
+@@ -22,13 +22,17 @@
      <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
  
      <application
@@ -622,7 +622,18 @@ index bdad89d..fa01e5a 100644
          android:icon="@mipmap/icon"
          android:roundIcon="@mipmap/icon"
          android:banner="@drawable/banner"
-@@ -61,6 +61,28 @@
+         android:theme="@style/Ink"
+         android:supportsRtl="true"
+-        android:usesCleartextTraffic="true">
++        android:usesCleartextTraffic="true"
++        android:allowBackup="true"
++        android:fullBackupContent="@xml/backup_rules"
++        android:dataExtractionRules="@xml/data_rules">
++        <!-- Android's own backup keeps your data (not what's fetched again): res/xml/data_rules.xml -->
+         <!-- cleartext: a server at home is usually plain http on the wifi (or a tailnet) -->
+ 
+         <!-- singleTop, not singleTask: opened again from the home screen, the task comes back as it
+@@ -61,6 +65,28 @@
                  <category android:name="android.intent.category.BROWSABLE" />
                  <data android:scheme="inkmusic" android:host="pair" />
              </intent-filter>
@@ -651,7 +662,7 @@ index bdad89d..fa01e5a 100644
          </activity>
  
          <!-- the player in its own process: the screens can be rebuilt (or crash) without a
-@@ -106,7 +128,7 @@
+@@ -106,7 +132,7 @@
          <receiver
              android:name=".Widget"
              android:process=":player"
@@ -660,6 +671,150 @@ index bdad89d..fa01e5a 100644
              android:exported="true">
              <intent-filter>
                  <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+diff --git a/app/src/main/java/app/ink/music/Backup.kt b/app/src/main/java/app/ink/music/Backup.kt
+new file mode 100644
+index 0000000..e6d93d1
+--- /dev/null
++++ b/app/src/main/java/app/ink/music/Backup.kt
+@@ -0,0 +1,138 @@
++package app.ink.music
++
++import android.content.ContentValues
++import android.content.Context
++import android.content.Intent
++import android.net.Uri
++import android.provider.MediaStore
++import android.util.Log
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.withContext
++import org.json.JSONObject
++import java.io.File
++import java.util.zip.ZipEntry
++import java.util.zip.ZipInputStream
++import java.util.zip.ZipOutputStream
++
++/**
++ * What you've made here kept apart from the app (the editions', 2026-11-21: "the music listening history, all search history is
++ * gone if you uninstall cause it's local"): what you've heard and searched, loved and made, your places and settings,
++ * zipped to Downloads/<app>/<app> backup.zip every two days and whenever asked, and brought back from that file in
++ * settings (listening > your data). What can be fetched again stays out: songs kept offline, podcasts' episodes, lyrics,
++ * the song cache, the sign-in browser's own files. Android's own backup (Google's) keeps the same, by
++ * res/xml/data_rules.xml, and puts it back by itself when the app's installed again.
++ */
++object Backup {
++    private val TOPS = listOf("files", "shared_prefs", "databases")
++    /** Fetched again, or this file's own note of where it wrote last (another install doesn't own that file). */
++    private val SKIP = listOf("files/offline", "files/offline-mp3", "files/podcasts", "files/lyrics", "shared_prefs/backup.xml", "databases/exoplayer")
++    private const val BIG = 20L shl 20
++    private const val EVERY = 2 * 86_400_000L
++    /** What the last ask said (backing up, saved, why not), for settings. */
++    val said = MutableStateFlow<String?>(null)
++
++    private fun label(c: Context) = c.applicationInfo.loadLabel(c.packageManager).toString()
++    private fun name(c: Context) = "${label(c)} backup.zip"
++    private fun prefs(c: Context) = c.getSharedPreferences("backup", Context.MODE_PRIVATE)
++
++    /** When it last backed up, in words ("today", "2 days ago"), or "not yet". */
++    fun last(c: Context): String {
++        val at = prefs(c).getLong("at", 0L)
++        if (at == 0L) return "not yet"
++        val days = ((System.currentTimeMillis() - at) / 86_400_000L).toInt()
++        return when (days) { 0 -> "today"; 1 -> "yesterday"; else -> "$days days ago" }
++    }
++
++    private fun kept(f: File, rel: String) = SKIP.none { rel == it || rel.startsWith("$it/") || rel.startsWith(it) && it.startsWith("databases/") } && f.length() <= BIG
++
++    /** All that's kept, zipped into [out]: how many files. */
++    private fun write(c: Context, out: java.io.OutputStream): Int {
++        var n = 0
++        ZipOutputStream(out.buffered()).use { z ->
++            z.putNextEntry(ZipEntry("backup.json"))
++            z.write(JSONObject().put("app", c.packageName).put("version", BuildConfig.VERSION_NAME).put("at", System.currentTimeMillis()).toString().toByteArray())
++            z.closeEntry()
++            for (top in TOPS) {
++                val dir = File(c.dataDir, top)
++                if (!dir.isDirectory) continue
++                dir.walkTopDown().filter { it.isFile }.forEach { f ->
++                    val rel = top + "/" + f.relativeTo(dir).path.replace(File.separatorChar, '/')
++                    if (!kept(f, rel)) return@forEach
++                    // read whole first: one being written as it's read is passed over, never cut short in the zip
++                    val bytes = runCatching { f.readBytes() }.getOrNull() ?: return@forEach
++                    z.putNextEntry(ZipEntry(rel)); z.write(bytes); z.closeEntry(); n++
++                }
++            }
++        }
++        return n
++    }
++
++    /** Into Downloads/<app>/, over the one this install wrote there last (else a new one): where, or null. */
++    suspend fun toDownloads(c: Context): String? = withContext(Dispatchers.IO) {
++        runCatching {
++            val r = c.contentResolver
++            val p = prefs(c)
++            var n = p.getString("uri", null)?.let { u -> runCatching { r.openOutputStream(Uri.parse(u), "wt")!!.use { write(c, it) } }.getOrNull() }
++            if (n == null) {
++                val v = ContentValues().apply {
++                    put(MediaStore.MediaColumns.DISPLAY_NAME, name(c))
++                    put(MediaStore.MediaColumns.MIME_TYPE, "application/zip")
++                    put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/${label(c)}")
++                    put(MediaStore.MediaColumns.IS_PENDING, 1)
++                }
++                val uri = r.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v) ?: error("no room in downloads")
++                n = r.openOutputStream(uri, "w")!!.use { write(c, it) }
++                r.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
++                p.edit().putString("uri", uri.toString()).apply()
++            }
++            p.edit().putLong("at", System.currentTimeMillis()).apply()
++            Log.i("ink-backup", "backed up: $n files")
++            "downloads/${label(c).lowercase()}"
++        }.onFailure { Log.w("ink-backup", "couldn't back up: $it") }.getOrNull()
++    }
++
++    /** By itself, every two days (the app opened, once there's something to keep). */
++    suspend fun auto(c: Context) {
++        if (System.currentTimeMillis() - prefs(c).getLong("at", 0L) < EVERY) return
++        if (!File(c.filesDir, "heard.jsonl").exists() && !File(c.filesDir, "searches.json").exists()) return
++        toDownloads(c)
++    }
++
++    /**
++     * The app as the backup at [uri] had it: its files put back (the player stopped first, so nothing it holds is
++     * written over them), then the app started again. Null when done, else why not.
++     */
++    suspend fun restore(c: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
++        val all = LinkedHashMap<String, ByteArray>()
++        val read = runCatching {
++            ZipInputStream(c.contentResolver.openInputStream(uri)!!.buffered()).use { z ->
++                while (true) { val e = z.nextEntry ?: break; if (!e.isDirectory) all[e.name] = z.readBytes() }
++            }
++        }
++        if (read.isFailure) return@withContext "that file couldn't be read"
++        val head = all["backup.json"]?.let { runCatching { JSONObject(String(it)) }.getOrNull() } ?: return@withContext "that isn't a backup from this app"
++        if (!head.optString("app").startsWith("app.ink.music")) return@withContext "that backup is another app's"
++        runCatching { c.stopService(Intent(c, PlayerService::class.java)) }
++        c.getSystemService(android.app.ActivityManager::class.java)?.runningAppProcesses
++            ?.filter { it.processName.endsWith(":player") }?.forEach { android.os.Process.killProcess(it.pid) }
++        Thread.sleep(400)
++        val root = c.dataDir.canonicalFile
++        var n = 0
++        for ((name, bytes) in all) {
++            if (name == "backup.json" || TOPS.none { name.startsWith("$it/") }) continue
++            val f = File(root, name).canonicalFile
++            if (!f.path.startsWith(root.path + File.separator)) continue   // nothing written outside the app's own
++            f.parentFile?.mkdirs()
++            f.writeBytes(bytes); n++
++        }
++        Log.i("ink-backup", "brought back: $n files, from ${head.optString("version")}")
++        withContext(Dispatchers.Main) {
++            c.packageManager.getLaunchIntentForPackage(c.packageName)?.let {
++                c.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
++            }
++            Runtime.getRuntime().exit(0)
++        }
++        null
++    }
++}
 diff --git a/app/src/main/java/app/ink/music/DialedInSheet.kt b/app/src/main/java/app/ink/music/DialedInSheet.kt
 index cb5b65a..4280a9b 100644
 --- a/app/src/main/java/app/ink/music/DialedInSheet.kt
@@ -967,7 +1122,7 @@ index 6396aeb..8f2b530 100644
  /**
   * A song's heart, as on the desktop: 17% while not loved; loving it, red with a soft red glow for
 diff --git a/app/src/main/java/app/ink/music/Main.kt b/app/src/main/java/app/ink/music/Main.kt
-index dc12dfd..7c6864b 100644
+index dc12dfd..74e5e9e 100644
 --- a/app/src/main/java/app/ink/music/Main.kt
 +++ b/app/src/main/java/app/ink/music/Main.kt
 @@ -159,9 +159,15 @@ class Main : ComponentActivity() {
@@ -1006,16 +1161,18 @@ index dc12dfd..7c6864b 100644
      }
  
      /** A TV's remote pressed with nothing focused (Compose then hears nothing): the first thing on screen takes focus. */
-@@ -376,6 +384,8 @@ private fun App() {
+@@ -376,6 +384,10 @@ private fun App() {
      var allowed by remember { mutableStateOf(Library.allowed(ctx)) }
      val welcomed by Seeds.welcomed.collectAsState()
      LaunchedEffect(allowed) { if (allowed) Library.start(ctx) }
 +    // Spotify playlists kept in step (the editions'): what's been added there, added on YouTube Music
 +    LaunchedEffect(Unit) { kotlinx.coroutines.delay(20_000); runCatching { SpotifySync.run(ctx) } }
++    // your data backed up to downloads, every two days (Backup)
++    LaunchedEffect(Unit) { kotlinx.coroutines.delay(45_000); runCatching { Backup.auto(ctx) } }
      // what plays found in the library once it's read (its cover, its record)
      val library by Library.songs.collectAsState()
      LaunchedEffect(library) { Playback.refresh() }
-@@ -384,6 +394,9 @@ private fun App() {
+@@ -384,6 +396,9 @@ private fun App() {
      // a computer's QR code read by the phone's own camera: its pairing page, on top (it pairs from there)
      val scanned by Computers.scanned.collectAsState()
      LaunchedEffect(scanned) { if (scanned != null && pages.stack.lastOrNull() != Page.HandOver) pages.open(Page.HandOver) }
@@ -1025,7 +1182,39 @@ index dc12dfd..7c6864b 100644
      var playerUp by rememberSaveable { mutableStateOf(false) }
      // what plays on another device, opened from its bar ([RemotePlayerPage])
      var remoteUp by remember { mutableStateOf(false) }
-@@ -536,7 +549,13 @@ private fun App() {
+@@ -443,23 +458,25 @@ private fun App() {
+                             Moves.less.value -> ContentTransform(fadeIn(tween(Motion.FADE)), fadeOut(tween(Motion.EXIT)))
+                             // forward, page over page: the new one comes in on top (its rows then cascade), the old one
+                             // stays whole under it till it's covered (both fading showed the library through them)
++                            // (the editions', 2026-11-21: smoother) a quarter of the way in on a spring that never overshoots, the old
++                            // page drifting back under it as it comes
+                             f && pageToPage -> ContentTransform(
+                                 // solid almost at once (a slower fade crossed its words with the old page's)
+-                                slideInHorizontally(tween(Motion.ENTER, easing = Motion.expo)) { (it * .12f).toInt() } + fadeIn(tween(90)),
+-                                fadeOut(tween(1, delayMillis = Motion.ENTER)),
++                                slideInHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 1f, stiffness = 420f)) { (it * .25f).toInt() } + fadeIn(tween(110)),
++                                slideOutHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 1f, stiffness = 420f)) { -(it * .08f).toInt() } + fadeOut(tween(1, delayMillis = Motion.ENTER)),
+                                 targetContentZIndex = 1f,
+                             )
+                             // back, page from page: the one under is simply there, the one leaving slides off over it
+                             !f && pageToPage -> ContentTransform(
+-                                EnterTransition.None,
+-                                slideOutHorizontally(tween(Motion.EXIT, easing = Motion.expo)) { (it * .12f).toInt() } + fadeOut(tween(Motion.EXIT)),
++                                slideInHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 1f, stiffness = 420f)) { -(it * .08f).toInt() },
++                                slideOutHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 1f, stiffness = 420f)) { (it * .3f).toInt() } + fadeOut(tween(Motion.EXIT)),
+                                 targetContentZIndex = -1f,
+                             )
+                             // to or from the library: as before, pushed in from the right and back to the right
+                             else -> ContentTransform(
+-                                slideInHorizontally(tween(Motion.ENTER, easing = Motion.expo)) { if (f) (it * .2f).toInt() else -(it * .1f).toInt() } +
++                                slideInHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 1f, stiffness = 420f)) { if (f) (it * .25f).toInt() else -(it * .1f).toInt() } +
+                                     fadeIn(tween(Motion.ENTER, easing = Motion.expo)),
+-                                slideOutHorizontally(tween(Motion.EXIT, easing = Motion.expo)) { if (f) -(it * .1f).toInt() else (it * .1f).toInt() } +
++                                slideOutHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 1f, stiffness = 420f)) { if (f) -(it * .1f).toInt() else (it * .25f).toInt() } +
+                                     fadeOut(tween(Motion.EXIT, easing = Motion.expo)),
+                             )
+                         }
+@@ -536,20 +553,32 @@ private fun App() {
              // songs picked: what to do with them all, in the mini player's place
              if (picking && !playerUp) PickBar(pages)
              else if (!stopping && !sideways() && !playingNow && elsewhere != null) Box(if (onTv()) Modifier.covered(playerUp) else Modifier) { RemoteMini(frost, elsewhere, onOpen = { remoteUp = true }) }
@@ -1040,7 +1229,30 @@ index dc12dfd..7c6864b 100644
          }
          androidx.compose.animation.AnimatedVisibility(
              playerUp,
-@@ -894,7 +913,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+-            enter = slideInVertically(tween(Motion.ENTER, easing = Motion.expo)) { (it * .06f).toInt() } + fadeIn(tween(Motion.ENTER, easing = Motion.expo)),
++            // (the editions', 2026-11-21: smoother) up from the foot the whole way, a sheet on a spring, solid at once
++            enter = if (Moves.less.value) fadeIn(tween(Motion.FADE))
++                else slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 380f)) { it } + fadeIn(tween(90)),
+             exit = if (stopping) slideOutVertically(tween(STOP_MS, easing = Motion.expo)) { it } + fadeOut(tween(STOP_MS, delayMillis = STOP_MS / 2))
+-                else slideOutVertically(tween(Motion.EXIT, easing = Motion.expo)) { (it * .04f).toInt() } + fadeOut(tween(Motion.EXIT, easing = Motion.expo)),
++                else if (Moves.less.value) fadeOut(tween(Motion.EXIT))
++                else slideOutVertically(tween(260, easing = androidx.compose.animation.core.FastOutLinearInEasing)) { it },
+         ) { PlayerPage(onClose = { playerUp = false }, onOpen = { playerUp = false; pages.open(it); if (it == Page.Find) OnAirSong.take()?.let { q -> pages.query = q } }, onStop = { stopping = true; playerUp = false }) }
+         val remote = Everywhere.remote.collectAsState().value
+         LaunchedEffect(remote == null) { if (remote == null) remoteUp = false }
+         androidx.compose.animation.AnimatedVisibility(
+             remoteUp && remote != null,
+-            enter = slideInVertically(tween(Motion.ENTER, easing = Motion.expo)) { (it * .06f).toInt() } + fadeIn(tween(Motion.ENTER, easing = Motion.expo)),
+-            exit = slideOutVertically(tween(Motion.EXIT, easing = Motion.expo)) { (it * .04f).toInt() } + fadeOut(tween(Motion.EXIT, easing = Motion.expo)),
++            // (the editions', 2026-11-21: smoother) up from the foot the whole way, a sheet on a spring, solid at once
++            enter = if (Moves.less.value) fadeIn(tween(Motion.FADE))
++                else slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 380f)) { it } + fadeIn(tween(90)),
++            exit = if (Moves.less.value) fadeOut(tween(Motion.EXIT))
++                else slideOutVertically(tween(260, easing = androidx.compose.animation.core.FastOutLinearInEasing)) { it },
+         ) { remote?.let { RemotePlayerPage(it) { remoteUp = false } } }
+     }
+ }
+@@ -894,7 +923,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
                  verticalAlignment = Alignment.CenterVertically) {
                  androidx.compose.animation.AnimatedContent(tab, label = "place",
                      transitionSpec = { androidx.compose.animation.fadeIn(tween(Motion.ENTER, easing = Motion.expo)) togetherWith androidx.compose.animation.fadeOut(tween(Motion.EXIT)) },
@@ -1049,7 +1261,7 @@ index dc12dfd..7c6864b 100644
                  Spacer(Modifier.width(10.dp))
                  // the menu's chevron: down while shut, up while open
                  val turn by androidx.compose.animation.core.animateFloatAsState(if (menu) 180f else 0f, tween(Motion.ENTER, easing = Motion.expo), label = "chevron")
-@@ -922,7 +941,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -922,7 +951,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
              }
              when (key) {
                  Hints.PULL -> Typed("pull down to find anything", pixel(12.sp, Ink.mid), hint)
@@ -1058,7 +1270,7 @@ index dc12dfd..7c6864b 100644
                  Hints.ACROSS -> Typed("swipe across for the place beside", pixel(12.sp, Ink.mid), hint)
                  Hints.TURN -> Typed("turn your phone sideways for a wall of covers", pixel(12.sp, Ink.mid), hint)
                  Hints.ORDER -> Typed("tap an order to change it: year, color, lately", pixel(12.sp, Ink.mid), hint)
-@@ -934,6 +953,8 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -934,6 +963,8 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
              }
          }
        }
@@ -1067,7 +1279,7 @@ index dc12dfd..7c6864b 100644
        Box(Modifier.fillMaxWidth().height(BAND).softEdge(tabsFrost, towardBottom = false))
      }
      // the places, dropped down under the word: big, the one you're on lit, each arriving in turn; a tap goes there (on
-@@ -954,14 +975,14 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -954,14 +985,14 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
          ) {
              tabs.forEachIndexed { i, t ->
                  // a TV's screen is short: the places a size smaller, so all of them and settings sit above the mini player
@@ -1084,7 +1296,7 @@ index dc12dfd..7c6864b 100644
              Word("your year", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size + 1, menu), touch = 8.dp) { menu = false; pages.open(Page.Year) }
              Word("ink mapped", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size + 2, menu), touch = 8.dp) { menu = false; pages.open(Page.Mapped) }
              // pairing a computer a tap from anywhere, not deep in settings; once one's paired, its name opens its setting
-@@ -1002,9 +1023,16 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -1002,9 +1033,16 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
      }
  }
  
@@ -1103,7 +1315,7 @@ index dc12dfd..7c6864b 100644
  
  /**
   * The pager's fling, but none when it's still and on its page. A row of covers flung to its end hands the
-@@ -1458,7 +1486,7 @@ private fun LovedPage(pages: Pages) {
+@@ -1458,7 +1496,7 @@ private fun LovedPage(pages: Pages) {
   * once (a second tap made a second playlist), then "open it".
   */
  @Composable
@@ -1112,7 +1324,7 @@ index dc12dfd..7c6864b 100644
      val scope = rememberCoroutineScope()
      // where it's being made ("youtube", "server"), and once made, the page that opens it
      var making by remember(name, found) { mutableStateOf<String?>(null) }
-@@ -1487,7 +1515,7 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
+@@ -1487,7 +1525,7 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
          }
      }
      if (who != null) Place("youtube", "youtube music") {
@@ -1121,7 +1333,7 @@ index dc12dfd..7c6864b 100644
              ?: run { said = "youtube music didn't take it"; false to null }
      }
      if (account != null) Place("server", "your server") {
-@@ -1671,7 +1699,7 @@ private fun ArtistPage(name: String, pages: Pages, tubeId: String = "") {
+@@ -1671,7 +1709,7 @@ private fun ArtistPage(name: String, pages: Pages, tubeId: String = "") {
                      // as it is (or in the grain), a light photo held down so the name on it reads (nameDim)
                      if (!dithered && !xray && c != null) {
                          val dim = remember(c) { nameDim(c.image) }
@@ -1130,7 +1342,7 @@ index dc12dfd..7c6864b 100644
                      }
                  }
                  else Box(Modifier.size(side).align(Alignment.Center))
-@@ -2096,18 +2124,29 @@ private fun ImportPage(pages: Pages) {
+@@ -2096,18 +2134,29 @@ private fun ImportPage(pages: Pages) {
      var progress by remember { mutableStateOf(0) }
      var matched by remember { mutableStateOf<List<Song?>?>(null) }
      var said by remember { mutableStateOf<String?>(null) }
@@ -1167,7 +1379,7 @@ index dc12dfd..7c6864b 100644
      LaunchedEffect(spotifyAt) {
          if (!Spotify.ready()) return@LaunchedEffect
          if (theirs == null) theirs = Spotify.playlists() ?: run { said = "spotify didn't say. sign in again"; null }
-@@ -2115,7 +2154,7 @@ private fun ImportPage(pages: Pages) {
+@@ -2115,7 +2164,7 @@ private fun ImportPage(pages: Pages) {
              reading = 0
              val songs = Spotify.songs(w.id) { reading = it }
              reading = null; wanted = null
@@ -1176,7 +1388,7 @@ index dc12dfd..7c6864b 100644
          }
      }
      fun open(w: Import.Theirs) {
-@@ -2125,7 +2164,7 @@ private fun ImportPage(pages: Pages) {
+@@ -2125,7 +2174,7 @@ private fun ImportPage(pages: Pages) {
              reading = 0
              val songs = Spotify.songs(w.id) { reading = it }
              reading = null; wanted = null
@@ -1185,7 +1397,7 @@ index dc12dfd..7c6864b 100644
          } else Spotify.signIn(ctx)
      }
      LaunchedEffect(chosen) {
-@@ -2143,39 +2182,21 @@ private fun ImportPage(pages: Pages) {
+@@ -2143,39 +2192,21 @@ private fun ImportPage(pages: Pages) {
              BasicText((c?.name ?: "FROM SPOTIFY").uppercase(), style = headline(40.sp), maxLines = 3, overflow = TextOverflow.Ellipsis)
              Spacer(Modifier.height(10.dp))
              when {
@@ -1238,7 +1450,7 @@ index dc12dfd..7c6864b 100644
                  }
                  m == null -> {
                      // a line filling as they're found, as the player's fills with the song
-@@ -2192,7 +2213,28 @@ private fun ImportPage(pages: Pages) {
+@@ -2192,7 +2223,28 @@ private fun ImportPage(pages: Pages) {
                      BasicText("${found.size} of ${c.songs.size} found   ${found.count { !it.tube }} yours", style = pixel(12.sp, Ink.mid))
                      Spacer(Modifier.height(16.dp))
                      Word("play it", pixel(14.sp), touch = 8.dp) { Playback.play(found, 0) }
@@ -1268,7 +1480,7 @@ index dc12dfd..7c6864b 100644
                      said?.let { Spacer(Modifier.height(10.dp)); BasicText(it, style = pixel(12.sp, Ink.mid)) }
                      Spacer(Modifier.height(14.dp))
                  }
-@@ -2200,6 +2242,7 @@ private fun ImportPage(pages: Pages) {
+@@ -2200,6 +2252,7 @@ private fun ImportPage(pages: Pages) {
          }
          // your spotify playlists: one picked
          if (c == null && reading == null && lists == null) theirs?.let { all ->
@@ -1276,7 +1488,7 @@ index dc12dfd..7c6864b 100644
              items(all, key = { it.id }) { l ->
                  Column(Modifier.fillMaxWidth().clickable(remember { MutableInteractionSource() }, indication = null, onClick = felt { open(l) }).padding(vertical = 9.dp)) {
                      BasicText(l.name.uppercase(), style = headline(22.sp), maxLines = 2, overflow = TextOverflow.Ellipsis)
-@@ -2296,7 +2339,7 @@ fun Dithered(photo: Song, modifier: Modifier, px: Int = 1080, print: Print = Pri
+@@ -2296,7 +2349,7 @@ fun Dithered(photo: Song, modifier: Modifier, px: Int = 1080, print: Print = Pri
      if (print == Print.CLEAR) return AsItIs(photo, modifier, px)
      val cover = rememberCover(photo, px)
      val density = LocalDensity.current
@@ -1285,7 +1497,7 @@ index dc12dfd..7c6864b 100644
          val side = with(density) { maxWidth.toPx() }
          val frames by androidx.compose.runtime.produceState<List<androidx.compose.ui.graphics.ImageBitmap>?>(null, cover, print) {
              val c = cover ?: return@produceState
-@@ -2344,11 +2387,11 @@ private fun Xrayed(photo: Song, modifier: Modifier, px: Int = 1080) {
+@@ -2344,11 +2397,11 @@ private fun Xrayed(photo: Song, modifier: Modifier, px: Int = 1080) {
      LaunchedEffect(pic) {
          if (pic != null) { if (Moves.less.value) shown.snapTo(1f) else shown.animateTo(1f, tween(600, easing = Motion.expo)) }
      }
@@ -1299,7 +1511,7 @@ index dc12dfd..7c6864b 100644
          }
      }
  }
-@@ -2375,7 +2418,7 @@ fun ArtistPhoto(photo: Song, modifier: Modifier) {
+@@ -2375,7 +2428,7 @@ fun ArtistPhoto(photo: Song, modifier: Modifier) {
  @Composable
  private fun AsItIs(photo: Song, modifier: Modifier, px: Int = 1080) {
      val cover = rememberCover(photo, px)
@@ -1308,7 +1520,7 @@ index dc12dfd..7c6864b 100644
          cover?.let { Image(it.image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
      }
  }
-@@ -2419,19 +2462,47 @@ private object Searches {
+@@ -2419,19 +2472,47 @@ private object Searches {
  
  /**
   * YouTube Music's answer to what's typed, and to its words alone where it has symbols (YouTube can answer a title's
@@ -1366,7 +1578,7 @@ index dc12dfd..7c6864b 100644
  }
  
  /** youtube.com's videos for what's typed and its words alone, together, best answers first. */
-@@ -2494,10 +2565,22 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2494,10 +2575,22 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
          seen[0] = forced
          value = online to forced
      }
@@ -1391,7 +1603,7 @@ index dc12dfd..7c6864b 100644
      }
      // radio's stations by that name (ink radio's own first)
      val stations by androidx.compose.runtime.produceState(emptyList<Song>(), ask) {
-@@ -2506,7 +2589,11 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2506,7 +2599,11 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
      // youtube.com's own videos (the full build): songs never put on YouTube Music, apart from its songs; none it already gave
      val videosAll by androidx.compose.runtime.produceState(emptyList<Song>(), ask) {
          val text = ask?.first
@@ -1404,7 +1616,7 @@ index dc12dfd..7c6864b 100644
      }
      // a YouTube video's id in what's typed ("[VDvX1hzGZN4]", as a file downloaded from YouTube is often named): that video
      val tubeId = if (pasted || !YouTubeMusic.available) null else Search.tubeId(raw)
-@@ -2517,6 +2604,26 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2517,6 +2614,26 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
      // a stream's own link pasted (not a service's): a station
      val streamed = remember(raw) { if (!pasted && RadioBrowser.isStream(raw)) Stations.of(RadioBrowser.pasted(raw)) else null }
      LaunchedEffect(Unit) { KeptStations.load(ctx) }
@@ -1431,7 +1643,7 @@ index dc12dfd..7c6864b 100644
      val videos = remember(videosAll, tube, byId) {
          val have = (tube.songs.flatMap { listOf(it.id, Radio.key(it.title, it.artist)) } + listOfNotNull(byId?.id)).toSet()
          videosAll.filter { it.id !in have && Radio.key(it.title, it.artist) !in have }.take(12)
-@@ -2625,16 +2732,17 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2625,16 +2742,17 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
                  Box(row) { SongRow(s, pages = pages) { Playback.play(foundSongs, i) } }
              }
          }
@@ -1458,7 +1670,7 @@ index dc12dfd..7c6864b 100644
          if (tubeArtists.isNotEmpty()) item {
              Label("artists on youtube music")
              LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-@@ -2656,9 +2764,18 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2656,9 +2774,18 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
              }
              Spacer(Modifier.height(10.dp))
          }
@@ -1480,7 +1692,7 @@ index dc12dfd..7c6864b 100644
          }
          if (tube.lists.isNotEmpty()) item {
              Label("playlists on youtube music")
-@@ -3896,7 +4013,7 @@ private fun TvRail(tabs: List<String>, tab: String, onPlace: (String) -> Unit, p
+@@ -3896,7 +4023,7 @@ private fun TvRail(tabs: List<String>, tab: String, onPlace: (String) -> Unit, p
      }
      // a little smaller, and scrolled if it must be, so settings stays above the mini player (it went under it)
      Column(Modifier.width(TV_RAIL).fillMaxHeight().padding(bottom = foot).verticalScroll(rememberScrollState()).padding(start = 28.dp, top = 24.dp, bottom = 12.dp)) {
@@ -1571,7 +1783,7 @@ index 9da9781..ea62400 100644
                              // the song playing there filling with its cover's color, as this phone's own queue does
                              if (i == r.index && r.length > 0 && !q.station) FilledTitle(q.title.uppercase(), tone, q, r.length, r.playing, r) { r.positionNow() }
 diff --git a/app/src/main/java/app/ink/music/Settings.kt b/app/src/main/java/app/ink/music/Settings.kt
-index 88425c2..608431e 100644
+index 88425c2..a80e41d 100644
 --- a/app/src/main/java/app/ink/music/Settings.kt
 +++ b/app/src/main/java/app/ink/music/Settings.kt
 @@ -87,7 +87,7 @@ private val COG = listOf(
@@ -1583,7 +1795,33 @@ index 88425c2..608431e 100644
      val account by Server.account.collectAsState()
      val count by Server.count.collectAsState()
      val syncing by Server.syncing.collectAsState()
-@@ -816,9 +816,9 @@ fun TvSettingsPage(pages: Pages) {
+@@ -415,6 +415,25 @@ fun SettingsPage(pages: Pages, part: String? = null) {
+                     val fm by LastFm.account.collectAsState()
+                     SettingRow("LAST.FM", fm?.name?.lowercase() ?: "connect", opened) { LastFmSetting(head = false) }
+                 }
++                // your data, kept apart from the app (the editions', 2026-11-21): a backup file in downloads, and brought back from one
++                val backupSaid by Backup.said.collectAsState()
++                val restoring = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
++                    if (uri != null) scope.launch { Backup.said.value = "bringing it back…"; Backup.said.value = Backup.restore(ctx, uri) }
++                }
++                SettingRow("YOUR DATA", "backed up ${Backup.last(ctx)}", opened, "what you've heard, searched, loved and made, kept in downloads every two days: an uninstall or a new phone loses nothing") {
++                    Column {
++                        Row {
++                            Word("back up now", pixel(14.sp), touch = 8.dp) {
++                                scope.launch { Backup.said.value = "backing up…"; Backup.said.value = Backup.toDownloads(ctx)?.let { "saved in $it" } ?: "couldn't back up just now" }
++                            }
++                            Word("restore a backup", pixel(14.sp), Modifier.padding(start = 26.dp), touch = 8.dp) {
++                                restoring.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
++                            }
++                        }
++                        backupSaid?.let { BasicText(it, style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(top = 8.dp)) }
++                        BasicText("restoring puts back what the backup had, over what's here, and starts the app again", style = pixel(12.sp, Ink.dim), modifier = Modifier.padding(top = 8.dp))
++                    }
++                }
+                 RowsEnd()
+             }
+ 
+@@ -816,9 +835,9 @@ fun TvSettingsPage(pages: Pages) {
      ) {
          item {
              Column(Modifier.widthIn(max = 640.dp)) {
@@ -1793,7 +2031,7 @@ index e9f26c9..475b5be 100644
          }
      }
 diff --git a/app/src/main/java/app/ink/music/Theme.kt b/app/src/main/java/app/ink/music/Theme.kt
-index 963ca1a..08a37e0 100644
+index 963ca1a..2b0d629 100644
 --- a/app/src/main/java/app/ink/music/Theme.kt
 +++ b/app/src/main/java/app/ink/music/Theme.kt
 @@ -46,33 +46,95 @@ import kotlinx.coroutines.delay
@@ -1905,6 +2143,17 @@ index 963ca1a..08a37e0 100644
  /**
   * Silkscreen's pixels blur together below 12 sp (2026-10-25: the small words were hard to
   * read): 12 at the least, the sizes just over it a step up, 14 and above as asked.
+@@ -87,8 +149,8 @@ private fun readable(size: TextUnit): TextUnit = when {
+ object Motion {
+     val expo = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
+     const val FADE = 150
+-    const val ENTER = 260
+-    const val EXIT = 140
++    const val ENTER = 320   // (the editions', 2026-11-21: 260, 140; smoother, still quick)
++    const val EXIT = 220
+     const val STAGGER = 50
+     val drift = 20.dp
+ }
 @@ -159,7 +221,8 @@ fun FadeText(
      // Laid out once; while it fades only the drawing changes: each word drawn in its own colour
      // through a clip around it (rebuilding styled text every frame cost the onn a frame a frame)
@@ -5658,6 +5907,52 @@ index dbb68a4..a28309f 100644
          <item name="android:statusBarColor">@android:color/transparent</item>
          <item name="android:navigationBarColor">@android:color/transparent</item>
          <item name="android:windowLightStatusBar">false</item>
+diff --git a/app/src/main/res/xml/backup_rules.xml b/app/src/main/res/xml/backup_rules.xml
+new file mode 100644
+index 0000000..5c696db
+--- /dev/null
++++ b/app/src/main/res/xml/backup_rules.xml
+@@ -0,0 +1,11 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- the same as data_rules.xml, for Android 11 -->
++<full-backup-content>
++        <exclude domain="file" path="offline"/>
++        <exclude domain="file" path="offline-mp3"/>
++        <exclude domain="file" path="podcasts"/>
++        <exclude domain="file" path="lyrics"/>
++        <exclude domain="database" path="exoplayer_internal.db"/>
++        <exclude domain="sharedpref" path="backup.xml"/>
++        <exclude domain="root" path="app_webview"/>
++</full-backup-content>
+diff --git a/app/src/main/res/xml/data_rules.xml b/app/src/main/res/xml/data_rules.xml
+new file mode 100644
+index 0000000..07e1e02
+--- /dev/null
++++ b/app/src/main/res/xml/data_rules.xml
+@@ -0,0 +1,23 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Android's own backup (Google's, and a new phone's transfer), the editions', 2026-11-21: everything the app keeps but what's
++     fetched again (songs kept offline, episodes, lyrics, the song cache's index, the sign-in browser). -->
++<data-extraction-rules>
++    <cloud-backup>
++        <exclude domain="file" path="offline"/>
++        <exclude domain="file" path="offline-mp3"/>
++        <exclude domain="file" path="podcasts"/>
++        <exclude domain="file" path="lyrics"/>
++        <exclude domain="database" path="exoplayer_internal.db"/>
++        <exclude domain="sharedpref" path="backup.xml"/>
++        <exclude domain="root" path="app_webview"/>
++    </cloud-backup>
++    <device-transfer>
++        <exclude domain="file" path="offline"/>
++        <exclude domain="file" path="offline-mp3"/>
++        <exclude domain="file" path="podcasts"/>
++        <exclude domain="file" path="lyrics"/>
++        <exclude domain="database" path="exoplayer_internal.db"/>
++        <exclude domain="sharedpref" path="backup.xml"/>
++        <exclude domain="root" path="app_webview"/>
++    </device-transfer>
++</data-extraction-rules>
 diff --git a/app/src/play/java/app/ink/music/Spotify.kt b/app/src/play/java/app/ink/music/Spotify.kt
 index e700907..503ffe4 100644
 --- a/app/src/play/java/app/ink/music/Spotify.kt

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- the same as data_rules.xml, for Android 11 -->
+<full-backup-content>
+        <exclude domain="file" path="offline"/>
+        <exclude domain="file" path="offline-mp3"/>
+        <exclude domain="file" path="podcasts"/>
+        <exclude domain="file" path="lyrics"/>
+        <exclude domain="database" path="exoplayer_internal.db"/>
+        <exclude domain="sharedpref" path="backup.xml"/>
+        <exclude domain="root" path="app_webview"/>
+</full-backup-content>

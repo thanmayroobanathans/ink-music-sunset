@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android's own backup (Google's, and a new phone's transfer), the editions', 2026-11-21: everything the app keeps but what's
+     fetched again (songs kept offline, episodes, lyrics, the song cache's index, the sign-in browser). -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="offline"/>
+        <exclude domain="file" path="offline-mp3"/>
+        <exclude domain="file" path="podcasts"/>
+        <exclude domain="file" path="lyrics"/>
+        <exclude domain="database" path="exoplayer_internal.db"/>
+        <exclude domain="sharedpref" path="backup.xml"/>
+        <exclude domain="root" path="app_webview"/>
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="offline"/>
+        <exclude domain="file" path="offline-mp3"/>
+        <exclude domain="file" path="podcasts"/>
+        <exclude domain="file" path="lyrics"/>
+        <exclude domain="database" path="exoplayer_internal.db"/>
+        <exclude domain="sharedpref" path="backup.xml"/>
+        <exclude domain="root" path="app_webview"/>
+    </device-transfer>
+</data-extraction-rules>

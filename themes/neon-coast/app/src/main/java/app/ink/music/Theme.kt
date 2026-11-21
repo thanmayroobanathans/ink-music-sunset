@@ -149,8 +149,8 @@ private fun readable(size: TextUnit): TextUnit = when {
 object Motion {
     val expo = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
     const val FADE = 150
-    const val ENTER = 260
-    const val EXIT = 140
+    const val ENTER = 320   // (the editions', 2026-11-21: 260, 140; smoother, still quick)
+    const val EXIT = 220
     const val STAGGER = 50
     val drift = 20.dp
 }

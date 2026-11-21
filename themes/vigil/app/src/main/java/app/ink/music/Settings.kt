@@ -415,6 +415,25 @@ fun SettingsPage(pages: Pages, part: String? = null) {
                     val fm by LastFm.account.collectAsState()
                     SettingRow("LAST.FM", fm?.name?.lowercase() ?: "connect", opened) { LastFmSetting(head = false) }
                 }
+                // your data, kept apart from the app (the editions', 2026-11-21): a backup file in downloads, and brought back from one
+                val backupSaid by Backup.said.collectAsState()
+                val restoring = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+                    if (uri != null) scope.launch { Backup.said.value = "bringing it back…"; Backup.said.value = Backup.restore(ctx, uri) }
+                }
+                SettingRow("YOUR DATA", "backed up ${Backup.last(ctx)}", opened, "what you've heard, searched, loved and made, kept in downloads every two days: an uninstall or a new phone loses nothing") {
+                    Column {
+                        Row {
+                            Word("back up now", pixel(14.sp), touch = 8.dp) {
+                                scope.launch { Backup.said.value = "backing up…"; Backup.said.value = Backup.toDownloads(ctx)?.let { "saved in $it" } ?: "couldn't back up just now" }
+                            }
+                            Word("restore a backup", pixel(14.sp), Modifier.padding(start = 26.dp), touch = 8.dp) {
+                                restoring.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+                            }
+                        }
+                        backupSaid?.let { BasicText(it, style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(top = 8.dp)) }
+                        BasicText("restoring puts back what the backup had, over what's here, and starts the app again", style = pixel(12.sp, Ink.dim), modifier = Modifier.padding(top = 8.dp))
+                    }
+                }
                 RowsEnd()
             }
 

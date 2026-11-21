@@ -49,20 +49,22 @@ import kotlinx.coroutines.flow.collectLatest
 // VIGIL theme (an unofficial build): a rain-soaked city after midnight. Cold black, bone-white headlines with a
 // steel sheen and a hard shadow, typewritten small print, sodium-amber streetlight for what's secondary; rain over it all.
 object Ink {
-    val black = Color(0xFF08090C)                 // cold black (was Color.Black)
+    // (the editions', 2026-11-21: darker, harder) near-total black, bone white, and a red light for all that's secondary
+    val black = Color(0xFF050506)                 // after midnight (was Color.Black)
     /** [black] as an ARGB int, for pictures drawn pixel by pixel (the dither's off dots). */
-    const val blackArgb: Int = 0xFF08090C.toInt()
+    const val blackArgb: Int = 0xFF050506.toInt()
     val ink = Color(0xFFE9E4D8)                   // bone white (was 0xFFF1F0EC, warm white)
-    /** The streetlight: what's secondary is sodium amber, not the ink dimmed. */
+    /** The red light: what's secondary burns red, not the ink dimmed. */
+    val red = Color(0xFFE04538)
+    /** The streetlight's sodium amber, and wet steel for the hairlines. */
     val amber = Color(0xFFE3A23B)
-    /** Wet steel, for the hairlines. */
     val steel = Color(0xFF8E9BAC)
     /** Bright light (the light sensor: sunlight): the dim words a step brighter, so they read outdoors. */
     var sun by androidx.compose.runtime.mutableStateOf(false)
-    val mid get() = amber.copy(alpha = if (sun) 1f else .9f)    // hover / secondary: amber
-    val dim get() = ink.copy(alpha = if (sun) .62f else .42f)   // unselected
-    val line = steel.copy(alpha = .26f)  // hairlines, steel
-    val plate = Color(0xFF151820)                 // wet asphalt (was 0xFF141414)
+    val mid get() = red.copy(alpha = if (sun) 1f else .95f)     // hover / secondary: the red light
+    val dim get() = ink.copy(alpha = if (sun) .6f else .4f)     // unselected
+    val line = steel.copy(alpha = .22f)  // hairlines, steel
+    val plate = Color(0xFF110C0E)                 // blood-dark asphalt (was 0xFF141414)
 }
 
 /** The sheen on every headline in the ink: bone white going to wet steel, left to right. */
@@ -71,7 +73,7 @@ val Sheen: androidx.compose.ui.graphics.Brush = androidx.compose.ui.graphics.Bru
 )
 /** A streetlight's line: amber in the middle, gone into the dark at either end. */
 val Streetlight: androidx.compose.ui.graphics.Brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
-    listOf(Color.Transparent, Color(0xE6E3A23B), Color(0xE6E3A23B), Color.Transparent),
+    listOf(Color.Transparent, Color(0xE6D7372E), Color(0xE6D7372E), Color.Transparent),
 )
 
 // Two fonts, never a third: Bebas Neue UPPERCASE (in archivo_black.ttf's place), Courier Prime lowercase (in
@@ -88,7 +90,7 @@ private val tight = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeight
 fun headline(size: TextUnit, color: Color = Ink.ink): TextStyle {
     val lit = color == Ink.ink
     val drop = if (Moves.less.value) null else androidx.compose.ui.graphics.Shadow(
-        color = Color.Black.copy(alpha = .85f),
+        color = Color(0xFF3B0605).copy(alpha = .92f),   // a red-black shadow under the words
         offset = Offset(0f, (size.value * .08f).coerceIn(1.5f, 8f)),
         blurRadius = (size.value * .12f).coerceIn(2f, 12f),
     )
@@ -119,33 +121,44 @@ fun placeName(key: String): String = when (key) {
 }
 
 /**
- * VIGIL over everything: rain falling past the glass, and the dark closing in at the edges. It only draws (nothing
- * under it loses a touch), in a layer of its own, so it's drawn again only when the screen's size changes.
+ * VIGIL over everything (the editions', 2026-11-21: darker, harder): a red light low on the street, bleeding up from the foot and in
+ * at a corner; the dark closing in at the edges; heavy rain past the glass; fine grain over it all. It only draws
+ * (nothing under it loses a touch), and never moves, in a layer of its own: drawn again only when the screen's size changes.
  */
 @Composable
 fun VigilOverlay(modifier: Modifier) {
     Canvas(modifier.graphicsLayer { }) {
         val h = size.height
         val w = size.width
+        val red = Color(0xFFE04538)
+        drawRect(androidx.compose.ui.graphics.Brush.verticalGradient(0f to Color.Transparent, .74f to Color.Transparent, 1f to red.copy(alpha = .17f)))
+        drawRect(androidx.compose.ui.graphics.Brush.radialGradient(0f to red.copy(alpha = .09f), 1f to Color.Transparent,
+            center = Offset(w, 0f), radius = maxOf(w, h) * .45f))
         // the dark at the edges
         drawRect(
             androidx.compose.ui.graphics.Brush.radialGradient(
-                0f to Color.Transparent, .62f to Color.Transparent, 1f to Color.Black.copy(alpha = .5f),
-                center = Offset(w / 2f, h * .45f), radius = maxOf(w, h) * .72f,
+                0f to Color.Transparent, .55f to Color.Transparent, 1f to Color.Black.copy(alpha = .64f),
+                center = Offset(w / 2f, h * .45f), radius = maxOf(w, h) * .7f,
             ),
         )
-        // the rain: the same drops every time (a fixed seed), slanting a little in the wind
+        // the rain: the same drops every time (a fixed seed), slanting in the wind
         val rnd = kotlin.random.Random(1939)
-        val drops = (w * h / 7000f).toInt().coerceIn(120, 900)
+        val drops = (w * h / 5200f).toInt().coerceIn(160, 1200)
         repeat(drops) {
-            val x = rnd.nextFloat() * (w + h * .2f) - h * .1f
+            val x = rnd.nextFloat() * (w + h * .25f) - h * .12f
             val y = rnd.nextFloat() * h
-            val len = (10f + rnd.nextFloat() * 26f) * density
-            val a = .04f + rnd.nextFloat() * .08f
+            val len = (12f + rnd.nextFloat() * 30f) * density
+            val a = .045f + rnd.nextFloat() * .09f
             drawLine(
-                Color(0xFFB8C6D8).copy(alpha = a), Offset(x, y), Offset(x - len * .16f, y + len),
+                Color(0xFFB8C6D8).copy(alpha = a), Offset(x, y), Offset(x - len * .2f, y + len),
                 strokeWidth = (if (rnd.nextFloat() < .2f) 1.6f else 1f) * density * .7f,
             )
+        }
+        // the grain: fine dust, the same every time
+        val g = kotlin.random.Random(1947)
+        val dot = androidx.compose.ui.geometry.Size(density, density)
+        repeat((w * h / 700f).toInt().coerceIn(800, 9000)) {
+            drawRect(Color.White.copy(alpha = .02f + g.nextFloat() * .035f), Offset(g.nextFloat() * w, g.nextFloat() * h), dot)
         }
     }
 }
@@ -164,8 +177,8 @@ private fun readable(size: TextUnit): TextUnit = when {
 object Motion {
     val expo = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
     const val FADE = 150
-    const val ENTER = 260
-    const val EXIT = 140
+    const val ENTER = 320   // (the editions', 2026-11-21: 260, 140; smoother, still quick)
+    const val EXIT = 220
     const val STAGGER = 50
     val drift = 20.dp
 }

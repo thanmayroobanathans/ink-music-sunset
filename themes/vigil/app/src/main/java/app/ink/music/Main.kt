@@ -386,6 +386,8 @@ private fun App() {
     LaunchedEffect(allowed) { if (allowed) Library.start(ctx) }
     // Spotify playlists kept in step (the editions'): what's been added there, added on YouTube Music
     LaunchedEffect(Unit) { kotlinx.coroutines.delay(20_000); runCatching { SpotifySync.run(ctx) } }
+    // your data backed up to downloads, every two days (Backup)
+    LaunchedEffect(Unit) { kotlinx.coroutines.delay(45_000); runCatching { Backup.auto(ctx) } }
     // what plays found in the library once it's read (its cover, its record)
     val library by Library.songs.collectAsState()
     LaunchedEffect(library) { Playback.refresh() }
@@ -456,23 +458,25 @@ private fun App() {
                             Moves.less.value -> ContentTransform(fadeIn(tween(Motion.FADE)), fadeOut(tween(Motion.EXIT)))
                             // forward, page over page: the new one comes in on top (its rows then cascade), the old one
                             // stays whole under it till it's covered (both fading showed the library through them)
+                            // (the editions', 2026-11-21: smoother) a quarter of the way in on a spring that never overshoots, the old
+                            // page drifting back under it as it comes
                             f && pageToPage -> ContentTransform(
                                 // solid almost at once (a slower fade crossed its words with the old page's)
-                                slideInHorizontally(tween(Motion.ENTER, easing = Motion.expo)) { (it * .12f).toInt() } + fadeIn(tween(90)),
-                                fadeOut(tween(1, delayMillis = Motion.ENTER)),
+                                slideInHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 1f, stiffness = 420f)) { (it * .25f).toInt() } + fadeIn(tween(110)),
+                                slideOutHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 1f, stiffness = 420f)) { -(it * .08f).toInt() } + fadeOut(tween(1, delayMillis = Motion.ENTER)),
                                 targetContentZIndex = 1f,
                             )
                             // back, page from page: the one under is simply there, the one leaving slides off over it
                             !f && pageToPage -> ContentTransform(
-                                EnterTransition.None,
-                                slideOutHorizontally(tween(Motion.EXIT, easing = Motion.expo)) { (it * .12f).toInt() } + fadeOut(tween(Motion.EXIT)),
+                                slideInHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 1f, stiffness = 420f)) { -(it * .08f).toInt() },
+                                slideOutHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 1f, stiffness = 420f)) { (it * .3f).toInt() } + fadeOut(tween(Motion.EXIT)),
                                 targetContentZIndex = -1f,
                             )
                             // to or from the library: as before, pushed in from the right and back to the right
                             else -> ContentTransform(
-                                slideInHorizontally(tween(Motion.ENTER, easing = Motion.expo)) { if (f) (it * .2f).toInt() else -(it * .1f).toInt() } +
+                                slideInHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 1f, stiffness = 420f)) { if (f) (it * .25f).toInt() else -(it * .1f).toInt() } +
                                     fadeIn(tween(Motion.ENTER, easing = Motion.expo)),
-                                slideOutHorizontally(tween(Motion.EXIT, easing = Motion.expo)) { if (f) -(it * .1f).toInt() else (it * .1f).toInt() } +
+                                slideOutHorizontally(androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntOffset>(dampingRatio = 1f, stiffness = 420f)) { if (f) -(it * .1f).toInt() else (it * .25f).toInt() } +
                                     fadeOut(tween(Motion.EXIT, easing = Motion.expo)),
                             )
                         }
@@ -559,16 +563,22 @@ private fun App() {
         }
         androidx.compose.animation.AnimatedVisibility(
             playerUp,
-            enter = slideInVertically(tween(Motion.ENTER, easing = Motion.expo)) { (it * .06f).toInt() } + fadeIn(tween(Motion.ENTER, easing = Motion.expo)),
+            // (the editions', 2026-11-21: smoother) up from the foot the whole way, a sheet on a spring, solid at once
+            enter = if (Moves.less.value) fadeIn(tween(Motion.FADE))
+                else slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 380f)) { it } + fadeIn(tween(90)),
             exit = if (stopping) slideOutVertically(tween(STOP_MS, easing = Motion.expo)) { it } + fadeOut(tween(STOP_MS, delayMillis = STOP_MS / 2))
-                else slideOutVertically(tween(Motion.EXIT, easing = Motion.expo)) { (it * .04f).toInt() } + fadeOut(tween(Motion.EXIT, easing = Motion.expo)),
+                else if (Moves.less.value) fadeOut(tween(Motion.EXIT))
+                else slideOutVertically(tween(260, easing = androidx.compose.animation.core.FastOutLinearInEasing)) { it },
         ) { PlayerPage(onClose = { playerUp = false }, onOpen = { playerUp = false; pages.open(it); if (it == Page.Find) OnAirSong.take()?.let { q -> pages.query = q } }, onStop = { stopping = true; playerUp = false }) }
         val remote = Everywhere.remote.collectAsState().value
         LaunchedEffect(remote == null) { if (remote == null) remoteUp = false }
         androidx.compose.animation.AnimatedVisibility(
             remoteUp && remote != null,
-            enter = slideInVertically(tween(Motion.ENTER, easing = Motion.expo)) { (it * .06f).toInt() } + fadeIn(tween(Motion.ENTER, easing = Motion.expo)),
-            exit = slideOutVertically(tween(Motion.EXIT, easing = Motion.expo)) { (it * .04f).toInt() } + fadeOut(tween(Motion.EXIT, easing = Motion.expo)),
+            // (the editions', 2026-11-21: smoother) up from the foot the whole way, a sheet on a spring, solid at once
+            enter = if (Moves.less.value) fadeIn(tween(Motion.FADE))
+                else slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 380f)) { it } + fadeIn(tween(90)),
+            exit = if (Moves.less.value) fadeOut(tween(Motion.EXIT))
+                else slideOutVertically(tween(260, easing = androidx.compose.animation.core.FastOutLinearInEasing)) { it },
         ) { remote?.let { RemotePlayerPage(it) { remoteUp = false } } }
     }
 }
