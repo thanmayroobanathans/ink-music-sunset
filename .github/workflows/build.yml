@@ -86,13 +86,17 @@ jobs:
         if: env.KEYSTORE_B64 != ''
         working-directory: ink-music
         run: |
-          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/sunset.p12"
+          # pasted on a phone: any space or line break that came with it let go
+          printf '%s' "$KEYSTORE_B64" | tr -d ' \r\n' | base64 -d > "$RUNNER_TEMP/sunset.p12"
+          pw=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d ' \r\n')
           {
             echo "storeFile=$RUNNER_TEMP/sunset.p12"
-            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "storePassword=$pw"
             echo "keyAlias=sunset"
-            echo "keyPassword=$KEYSTORE_PASSWORD"
+            echo "keyPassword=$pw"
           } > keystore.properties
+          keytool -list -keystore "$RUNNER_TEMP/sunset.p12" -storetype PKCS12 -storepass "$pw" > /dev/null \
+            && echo "the key opens with its password" || { echo "::error::KEYSTORE_B64 and KEYSTORE_PASSWORD don't open together: paste them again"; exit 1; }
 
       - name: Build the APK
         working-directory: ink-music
