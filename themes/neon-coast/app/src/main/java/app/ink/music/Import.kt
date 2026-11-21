@@ -19,7 +19,7 @@ import org.json.JSONObject
  */
 object Import {
     /** A song as the file says it. */
-    data class Said(val title: String, val artist: String, val album: String)
+    data class Said(val title: String, val artist: String, val album: String, val tube: String = "", val ms: Long = 0)
 
     /** A playlist as the file has it. */
     data class Listed(val name: String, val songs: List<Said>)
@@ -127,10 +127,13 @@ object Import {
         val title = col("track name", "title", "name").takeIf { it >= 0 } ?: return null
         val artist = col("artist name(s)", "artist name", "artist", "artists")
         val album = col("album name", "album")
+        // a playlist sent from the app (the editions', 2026-11-21): each song's YouTube id, and its length
+        val tube = col("youtube id")
+        val ms = col("duration (ms)")
         val songs = rows.drop(1).mapNotNull { r ->
             val by = r.getOrNull(artist).orEmpty().substringBefore(';').substringBefore(", ")
                 .let { a -> if (Regex(",\\S").containsMatchIn(a)) a.substringBefore(',') else a }
-            Said(r.getOrNull(title).orEmpty(), by.trim(), r.getOrNull(album).orEmpty())
+            Said(r.getOrNull(title).orEmpty(), by.trim(), r.getOrNull(album).orEmpty(), r.getOrNull(tube).orEmpty().trim(), r.getOrNull(ms)?.trim()?.toLongOrNull() ?: 0L)
                 .takeIf { it.title.isNotBlank() }
         }
         return Listed(name, songs).takeIf { songs.isNotEmpty() }
@@ -182,7 +185,11 @@ object Import {
      * file (a video's sound, saved: no artist) is found by its title, and a song only ever up as a video by its words.
      */
     private fun tube(s: Said): Song? =
-        (if (s.artist.isNotBlank()) runCatching { YouTubeMusic.find(s.title, s.artist)?.takeIf { same(it.artist, s.artist) } }.getOrNull() else null)
+        // sent from the app: the very song, by its id (the editions', 2026-11-21)
+        s.tube.takeIf { it.isNotEmpty() && it.all { c -> c.isLetterOrDigit() || c == '-' || c == '_' } }?.let { v ->
+            Song("y$v", Uri.parse("ytm://$v"), s.title, s.artist, s.album, "y$v", s.artist.substringBefore(", "), s.ms, 1, 0, 0,
+                art = "https://i.ytimg.com/vi/$v/hqdefault.jpg", format = "youtube")
+        } ?: (if (s.artist.isNotBlank()) runCatching { YouTubeMusic.find(s.title, s.artist)?.takeIf { same(it.artist, s.artist) } }.getOrNull() else null)
             ?: runCatching { YouTubeMusic.findVideo(s.title, s.artist) }.getOrNull()
                 ?.also { android.util.Log.i("ink-import", "\"${s.title}\": its video, \"${it.title}\"") }
 }

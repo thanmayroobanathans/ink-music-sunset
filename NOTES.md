@@ -1,2 +1,3 @@
-- Spotify playlists of local files (YouTube videos saved as songs, with no artist) now play: each is found as its video on YouTube. Open the Exportify file again to bring them in
-- A song that's only up on YouTube as a video, not on YouTube Music, is found too
+- Playlists on your phone: make as many as you like, no sign-in. Lists → + new playlist, or hold any song → add to playlist and tick the ones it goes in
+- Each playlist has its own page: big cover (your own picture if you like), play and shuffle, add songs, edit to drag songs into order, find, sort, pin, send it to a friend, and songs like these to add
+- A Spotify playlist you bring in can be kept on the phone; bring it in again and only its new songs are added

@@ -186,6 +186,7 @@ class Main : ComponentActivity() {
         YouTubeAccount.start(this)
         HiddenLists.load(this)
         FollowedLists.load(this)
+        PhoneLists.load(this)
         Moving.start(this)
         Receiver.log = { android.util.Log.d("ink-receiver", it) }
         ListenBrainz.start(this)
@@ -303,6 +304,9 @@ sealed interface Page {
     data object Find : Page
     data object Settings : Page
     data class Playlist(val id: String, val name: String) : Page
+    /** One of yours on the phone ([PhoneLists], the editions', 2026-11-21), and songs going into it. */
+    data class Mine(val id: String) : Page
+    data class MineAdd(val id: String) : Page
     data class Tube(val album: TubeAlbum) : Page
     data class AddTo(val song: Song) : Page
     /** Several songs picked (Picking), into a playlist. */
@@ -376,7 +380,7 @@ class Pages {
 
 /** A page of browsing: one music leads to another from (an artist, a record, a playlist, YouTube's). */
 private fun Page.browsing() = this is Page.Artist || this is Page.TubeArtist || this is Page.Record || this is Page.Tube ||
-    this is Page.Playlist || this is Page.TubeList
+    this is Page.Playlist || this is Page.TubeList || this is Page.Mine
 
 @Composable
 private fun App() {
@@ -498,6 +502,8 @@ private fun App() {
                         // a TV's settings: one short page (TvSettingsPage)
                         Page.Settings -> if (onTv()) TvSettingsPage(pages) else SettingsPage(pages)
                         is Page.Playlist -> PlaylistPage(p.id, p.name, pages)
+                        is Page.Mine -> MinePage(p.id, pages)
+                        is Page.MineAdd -> MineAddPage(p.id, pages)
                         is Page.Tube -> TubeAlbumPage(p.album, pages)
                         is Page.AddTo -> AddToPage(p.song, pages)
                         is Page.AddToMany -> AddToList(p.songs, onDone = { pages.back(); Picking.clear() }, onClose = { pages.close() })
@@ -845,6 +851,8 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
                     item { ListsView() }
                     item {
                         if (lovedIds.isNotEmpty()) ListRow("loved", "${lovedIds.size} ${if (lovedIds.size == 1) "song" else "songs"}", heart = true) { pages.open(Page.Loved) }
+                        // yours, on the phone (the editions', 2026-11-21): made here, no sign-in
+                        if (!tv) MineRows(pages)
                         if (!tv) ListRow("your year", minutes?.let { if (it > 0) "%,d minutes so far".format(it) else "starts now" } ?: "") { pages.open(Page.Year) }
                         if (!tv) ListRow("ink mapped", if (Mapped.SOON) "coming soon" else "your listening as land, these days") { pages.open(Page.Mapped) }
                         // what's on the phone to play with no signal (your server's, YouTube's)
@@ -855,7 +863,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
                         // lists that fill themselves from rules (SmartLists), and a new one
                         SmartRows(pages)
                         Spacer(Modifier.height(10.dp))
-                        if (account != null) { NewPlaylist(null) {}; Spacer(Modifier.height(10.dp)) }
+                        if (account != null) { BasicText("on your server", style = pixel(12.sp, Ink.mid)); NewPlaylist(null) {}; Spacer(Modifier.height(10.dp)) }
                     }
                     items(lists, key = { it.id }) { pl ->
                         Column(Modifier.fillMaxWidth().clickable(remember { MutableInteractionSource() }, indication = null,
@@ -1221,7 +1229,7 @@ internal fun SongRow(s: Song, number: String? = null, pages: Pages? = null, onRe
             Word(if (s.id in lovedIds) "unlove" else "love", pixel(13.sp), touch = 8.dp) { open = false; Loved.toggle(s) }
             val account by Server.account.collectAsState()
             val tubeWho by YouTubeAccount.who.collectAsState()
-            if (pages != null && ((account != null && Server.idOf(s) != null) || (tubeWho != null && !s.station && !s.episode)))
+            if (pages != null && !s.station)
                 Word("add to playlist", pixel(13.sp), touch = 8.dp) { open = false; pages.open(Page.AddTo(s)) }
             val sonic by Server.sonic.collectAsState()
             if (pages != null && sonic && account != null && Server.idOf(s) != null)
@@ -1505,7 +1513,7 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages, onTube: ((app
     val who by YouTubeAccount.who.collectAsState()
     val account by Server.account.collectAsState()
     @Composable
-    fun Place(key: String, where: String, make: suspend () -> Pair<Boolean, Page?>) {
+    fun Place(key: String, where: String, verb: String = "make it on", make: suspend () -> Pair<Boolean, Page?>) {
         Spacer(Modifier.height(10.dp))
         when {
             made.containsKey(key) -> Row {
@@ -1513,7 +1521,7 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages, onTube: ((app
                 made[key]?.let { page -> Word("open it", pixel(14.sp), touch = 8.dp) { pages.open(page) } }
             }
             making == key -> BasicText("making it on $where", style = pixel(14.sp, Ink.dim), modifier = Modifier.padding(top = 8.dp))
-            else -> Word("make it on $where", pixel(14.sp, Ink.mid), touch = 8.dp) {
+            else -> Word("$verb $where", pixel(14.sp, if (key == "phone") Ink.ink else Ink.mid), touch = 8.dp) {
                 if (making != null) return@Word
                 making = key
                 scope.launch {
@@ -1522,6 +1530,19 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages, onTube: ((app
                     making = null
                 }
             }
+        }
+    }
+    // on the phone (the editions', 2026-11-21): no sign-in; brought in again, only its new songs go into the one made before
+    val there = remember(name) { PhoneLists.lists.value.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) } }
+    Place("phone", "this phone", if (there != null) "add the new ones on" else "make it on") {
+        if (there != null) {
+            val n = PhoneLists.add(there.id, found)
+            said = if (n == 0) "nothing new for it on this phone" else "$n new ${if (n == 1) "song" else "songs"} into it on this phone"
+            true to Page.Mine(there.id)
+        } else {
+            val m = PhoneLists.make(name, found)
+            said = "${m.entries.size} songs, on this phone"
+            true to Page.Mine(m.id)
         }
     }
     if (who != null) Place("youtube", "youtube music") {
@@ -2966,7 +2987,8 @@ private fun AddToPage(s: Song, pages: Pages) = AddToList(s, onDone = { pages.bac
 fun canAddToList(s: Song?): Boolean {
     val account by Server.account.collectAsState()
     val who by YouTubeAccount.who.collectAsState()
-    return s != null && ((account != null && Server.idOf(s) != null) || (who != null && !s.station && !s.episode))
+    // (the editions', 2026-11-21) any song, into one of yours on the phone; a station is live, no song to keep
+    return s != null && !s.station
 }
 
 /**
@@ -3004,8 +3026,10 @@ fun AddToList(songs: List<Song>, onDone: (String) -> Unit, onClose: () -> Unit) 
             BasicText(if (songs.size == 1) s.title.lowercase() else "${songs.size} songs", style = pixel(12.sp, Ink.mid), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(18.dp))
             if (failed) BasicText("that didn't take", style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(bottom = 8.dp))
+            // yours on the phone (the editions', 2026-11-21): ticked in or out, as many as you like, then done
+            SavedIn(songs) { name -> if (name != null) onDone(name) else onClose() }
             if (server) {
-                if (who != null) Label("on your server")
+                Label("on your server")
                 NewPlaylist(s, focused = mine.isEmpty() && who == null, make = { Server.makePlaylist(it, onServer) }) { ok -> if (ok) onDone("a new playlist") else failed = true }
                 if (mine.isEmpty()) BasicText("no playlists of yours on your server yet: new > makes one, named as you type", style = pixel(12.sp, Ink.mid),
                     modifier = Modifier.padding(top = 6.dp))
@@ -3472,7 +3496,7 @@ private fun ListsView() {
 
 /** A list as a tile: its art square, its name and what it holds under it. */
 @Composable
-private fun ListTile(name: String, said: String, onClick: () -> Unit, heart: Boolean = false, art: @Composable () -> Unit) {
+internal fun ListTile(name: String, said: String, onClick: () -> Unit, heart: Boolean = false, art: @Composable () -> Unit) {
     Column(Modifier.clickable(remember { MutableInteractionSource() }, indication = null, onClick = felt(then = onClick))) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).background(Ink.black)) {
             art()
@@ -3486,7 +3510,7 @@ private fun ListTile(name: String, said: String, onClick: () -> Unit, heart: Boo
 
 /** A list's art from its songs: four of its records' covers, two by two; fewer records, the first; none, its name. */
 @Composable
-private fun Mosaic(songs: List<Song>, name: String) {
+internal fun Mosaic(songs: List<Song>, name: String) {
     val four = remember(songs) { songs.distinctBy { it.albumId }.take(4) }
     when {
         four.size == 4 -> Column(Modifier.fillMaxSize()) {
@@ -3519,6 +3543,8 @@ private fun ListsTiles(pages: Pages, pad: PaddingValues, minutes: Long?) {
         (songs.filter { it.id in lovedIds } + lovedTube + liked).distinctBy { it.id }.sortedByDescending { Loved.lovedAt(it) ?: Long.MIN_VALUE }
     }
     val kept = remember(keptIds) { (keptIds.mapNotNull { Library.song(it) } + Offline.tubeSongs(ctx).filter { it.id in keptIds }).distinctBy { it.id } }
+    val mines by PhoneLists.lists.collectAsState()
+    val mineOrder by PhoneLists.order.collectAsState()
     LazyVerticalGrid(
         GridCells.Adaptive(150.dp), contentPadding = pad,
         horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(22.dp),
@@ -3530,6 +3556,11 @@ private fun ListsTiles(pages: Pages, pad: PaddingValues, minutes: Long?) {
         }
         if (lovedIds.isNotEmpty()) item(key = "loved") {
             ListTile("loved", "${lovedIds.size} ${if (lovedIds.size == 1) "song" else "songs"}", { pages.open(Page.Loved) }, heart = true) { Mosaic(loved, "loved") }
+        }
+        // yours on the phone (the editions', 2026-11-21): a new one, then each with its picture
+        if (!Device.tv) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }, key = "mineNew") { MineNew(pages) }
+        if (!Device.tv) items(PhoneLists.sorted(mines, mineOrder), key = { "m" + it.id }) { m ->
+            ListTile(m.name, "playlist   ${m.entries.size} ${if (m.entries.size == 1) "song" else "songs"}", { pages.open(Page.Mine(m.id)) }) { MineCover(m, Modifier.fillMaxSize()) }
         }
         // (not on a TV: your year's a phone's thing, 2026-11-10)
         if (!Device.tv) item(key = "year") {
@@ -3578,7 +3609,7 @@ private fun ListsTiles(pages: Pages, pad: PaddingValues, minutes: Long?) {
  * it (the grey name cover read as a missing picture).
  */
 @Composable
-private fun Lettered(name: String) {
+internal fun Lettered(name: String) {
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().background(Ink.black).border(1.dp, Ink.line)) {
         val size = with(androidx.compose.ui.platform.LocalDensity.current) { (maxWidth * .15f).toSp() }
         BasicText(name.uppercase(), style = headline(size).copy(lineHeight = size * 1.02f), maxLines = 4, overflow = TextOverflow.Ellipsis,
@@ -3794,8 +3825,8 @@ private fun PickBar(pages: Pages) {
             // play next keeps them in the order picked: each put after the one before
             Word("play next", pixel(13.sp), touch = 8.dp) { picked.reversed().forEach { Playback.playNext(it) }; said = "PLAYING NEXT" }
             Word("add to queue", pixel(13.sp), touch = 8.dp) { picked.forEach { Playback.add(it) }; said = "QUEUED" }
-            if ((account != null && picked.any { Server.idOf(it) != null }) || (who != null && picked.any { !it.station && !it.episode }))
-                Word("add to playlist", pixel(13.sp), touch = 8.dp) { pages.open(Page.AddToMany(picked)) }
+            if (picked.any { !it.station })
+                Word("add to playlist", pixel(13.sp), touch = 8.dp) { pages.open(Page.AddToMany(picked.filter { !it.station })) }
             if (picked.any { it.id !in lovedIds }) Word("love", pixel(13.sp), touch = 8.dp) { picked.filter { it.id !in lovedIds }.forEach { Loved.toggle(it) }; said = "LOVED" }
             val keep = picked.filter { Offline.keepable(it) }
             if (keep.isNotEmpty()) Word("keep offline", pixel(13.sp), touch = 8.dp) { Offline.keep(ctx, keep); said = "KEEPING OFFLINE" }

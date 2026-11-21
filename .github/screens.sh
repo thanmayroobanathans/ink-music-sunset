@@ -157,6 +157,24 @@ local_files_test() {
   sleep 35; clear_pops; shot 03g-local-files 2
   adb logcat -d -s ink-import:* | grep -v "^-" | tail -30 > "$OUT/local-files-log.txt"
   cat "$OUT/local-files-log.txt"
+  playlist_test || echo "playlist test stopped"
+  adb shell input keyevent KEYCODE_BACK; sleep 2
+}
+
+# The songs found, kept as a playlist on the phone (the editions', 2026-11-21: Spotify's, beside ours) and opened: its
+# page; editing (drag to move, take out); a song held, "add to playlist" (saved in, ticked); songs like these, under it.
+playlist_test() {
+  tap "make it on this phone" || return 1
+  sleep 2; tap "open it" || return 1
+  shot 03h-playlist 5
+  tap "edit" && { shot 03i-playlist-edit 2; tap "done"; sleep 1; }
+  local at x y
+  at=$(find_text "ferrari laferrari loud revving & sound!" "ferrari laferrari") && {
+    x=${at% *}; y=${at#* }
+    adb shell input swipe $x $y $x $y 900; sleep 2
+    tap "add to playlist" && { shot 03j-saved-in 3; tap "done"; sleep 2; }
+  }
+  swipe_up; swipe_up; shot 03k-playlist-ideas 8
   adb shell input keyevent KEYCODE_BACK; sleep 2
 }
 # find: a song typed, its answer photographed as it comes, and how long YouTube Music took (the app's own log)
