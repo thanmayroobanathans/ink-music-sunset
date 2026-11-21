@@ -532,6 +532,13 @@ object YouTubeMusic {
     }.getOrNull()
 
     /** YouTube Music's song by these words, if it has one (blocking). */
+    /** A video of it on youtube.com, where YouTube Music has no song of it (the editions', 2026-11-21: [TubeVideos.byTitle]), as a song. */
+    fun findVideo(title: String, artist: String): Song? = TubeVideos.byTitle(title, artist)?.let { f ->
+        Song(id = "y${f.id}", uri = Uri.parse("ytm://${f.id}"), title = f.title, artist = f.channel.ifEmpty { artist.ifEmpty { "unknown" } },
+            album = "", albumId = "y${f.id}", albumArtist = f.channel.ifEmpty { artist }, duration = f.seconds * 1000L, disc = 1, track = 0,
+            year = 0, art = "https://i.ytimg.com/vi/${f.id}/hqdefault.jpg", format = "youtube").also(::remember)
+    }
+
     fun find(title: String, artist: String): Song? {
         // a version chosen by hand for these words (Versions): that one
         app?.let { Versions.byWords(it, title, artist) }?.let { v ->

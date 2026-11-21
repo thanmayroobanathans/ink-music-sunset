@@ -137,6 +137,28 @@ exportify_test() {
   adb shell appops set "$PKG" MANAGE_EXTERNAL_STORAGE default
   adb shell input keyevent KEYCODE_BACK; sleep 2; adb shell input keyevent KEYCODE_BACK; sleep 2
 }
+# A Spotify playlist of local files (videos' sound saved as files: no artist, a file's "_" for a "|"; the editions',
+# 2026-11-21: none of 48 found): its CSV opened from the app's own shared folder (as root, so no leave is needed), and
+# how many it found, from the app's log.
+local_files_test() {
+  adb root > /dev/null 2>&1; sleep 3; adb wait-for-device
+  printf '%s\n' '"Track URI","Track Name","Artist URI(s)","Artist Name(s)","Album Name"' \
+    '"spotify:local::::1200","20 MINUTES OF INTENSE RACING IN THE RAIN _ AMBIENT SOUND ONLY","","",""' \
+    '"spotify:local::::300","ORECA 07 LMP2 w 600hp Gibson V8 Engine Testing at Monza","","",""' \
+    '"spotify:local::::300","Ferrari LaFerrari LOUD Revving & Sound!","","",""' \
+    '"spotify:local::::300","Ferrari 499P LMH Le-Mans Hypercar PURE Sound!","","",""' \
+    '"spotify:local::::300","WRC Pure Sound | 2023 Rally Croatia PURE SOUND","","",""' > racing_in_the_rain.csv
+  local dir="/data/data/$PKG/cache/shared" uid
+  adb shell mkdir -p "$dir"; adb push racing_in_the_rain.csv "$dir/racing_in_the_rain.csv" > /dev/null
+  uid=$(adb shell stat -c %u "/data/data/$PKG" | tr -d '\r')
+  adb shell chown -R "$uid:$uid" "$dir"; adb shell restorecon -R "$dir" > /dev/null 2>&1
+  adb logcat -c
+  adb shell am start -a android.intent.action.VIEW -t text/csv -d "content://$PKG.shared/shared/racing_in_the_rain.csv" -n "$PKG/app.ink.music.Main"
+  sleep 35; clear_pops; shot 03g-local-files 2
+  adb logcat -d -s ink-import:* | grep -v "^-" | tail -30 > "$OUT/local-files-log.txt"
+  cat "$OUT/local-files-log.txt"
+  adb shell input keyevent KEYCODE_BACK; sleep 2
+}
 # find: a song typed, its answer photographed as it comes, and how long YouTube Music took (the app's own log)
 adb logcat -c
 if tap find; then
@@ -163,6 +185,7 @@ if tap find; then
 fi
 clear_pops
 exportify_test || echo "exportify test stopped"
+local_files_test || echo "local files test stopped"
 adb shell am start -n "$PKG/app.ink.music.Main" > /dev/null; sleep 3
 clear_pops
 # the places menu (the big words), from the place's word at the top

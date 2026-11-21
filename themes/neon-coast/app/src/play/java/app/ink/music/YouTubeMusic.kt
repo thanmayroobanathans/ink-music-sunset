@@ -21,6 +21,7 @@ object YouTubeMusic {
     fun warmUp(c: android.content.Context) {}
     fun related(id: String): List<Song> = emptyList()
     fun find(title: String, artist: String): Song? = null
+    fun findVideo(title: String, artist: String): Song? = null
     fun moods(): List<TubeMood> = emptyList()
     fun mood(params: String): List<Pair<String, List<TubeList>>> = emptyList()
     fun moodStation(params: String): List<Song> = emptyList()

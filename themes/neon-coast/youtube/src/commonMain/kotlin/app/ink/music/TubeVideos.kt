@@ -119,6 +119,27 @@ object TubeVideos {
 
     private fun plain(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
 
+    /**
+     * A video by its title (the editions', 2026-11-21: a Spotify playlist of local files, videos' sound saved as files, came in with no
+     * artist, a file's "_" for a "|", and none of 48 was found): the first of youtube.com's answers with the title's
+     * words in its own, any length. Three in four of them with no artist said; with one, three in five and the artist
+     * in its channel or its title. A one-word title with no artist only for a title of a few words, near the same.
+     */
+    fun byTitle(title: String, artist: String = ""): Found? {
+        val want = words(title)
+        if (want.isEmpty()) return null
+        val by = plain(artist)
+        val q = (if (artist.isBlank()) "" else "$artist ") + title.replace('_', ' ')
+        return search(q, 10).firstOrNull { f ->
+            val got = words(f.title)
+            val share = want.count { it in got } / want.size.toFloat()
+            if (by.isEmpty()) share >= .75f && (want.size >= 2 || got.size <= 3)
+            else share >= .6f && (plain(f.channel).let { c -> c.isNotEmpty() && (c.contains(by) || by.contains(c)) } || plain(f.title).contains(by))
+        }
+    }
+
+    private fun words(s: String) = s.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }.toSet()
+
     private fun days(ago: String): Int {
         val m = Regex("""(\d+) (second|minute|hour|day|week|month|year)s? ago""").find(ago) ?: return NEVER
         val n = m.groupValues[1].toInt()

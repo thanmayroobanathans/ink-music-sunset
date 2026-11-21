@@ -516,7 +516,7 @@ index 770e3f8..2fe521b 100644
      val offer = MutableStateFlow<Update?>(null)
      val step = MutableStateFlow<Updating>(Updating.Offered)
 diff --git a/app/src/full/java/app/ink/music/YouTubeMusic.kt b/app/src/full/java/app/ink/music/YouTubeMusic.kt
-index 10e2758..ef7a9fe 100644
+index 10e2758..3bf3845 100644
 --- a/app/src/full/java/app/ink/music/YouTubeMusic.kt
 +++ b/app/src/full/java/app/ink/music/YouTubeMusic.kt
 @@ -49,41 +49,58 @@ object YouTubeMusic {
@@ -609,6 +609,20 @@ index 10e2758..ef7a9fe 100644
              .also { android.util.Log.d("ink-youtube", "search \"$q\": ${it.songs.size} songs, ${it.albums.size} records, ${it.artists.size} artists, ${it.lists.size} playlists in ${System.currentTimeMillis() - t0} ms") }
      }
  
+@@ -515,6 +532,13 @@ object YouTubeMusic {
+     }.getOrNull()
+ 
+     /** YouTube Music's song by these words, if it has one (blocking). */
++    /** A video of it on youtube.com, where YouTube Music has no song of it (the editions', 2026-11-21: [TubeVideos.byTitle]), as a song. */
++    fun findVideo(title: String, artist: String): Song? = TubeVideos.byTitle(title, artist)?.let { f ->
++        Song(id = "y${f.id}", uri = Uri.parse("ytm://${f.id}"), title = f.title, artist = f.channel.ifEmpty { artist.ifEmpty { "unknown" } },
++            album = "", albumId = "y${f.id}", albumArtist = f.channel.ifEmpty { artist }, duration = f.seconds * 1000L, disc = 1, track = 0,
++            year = 0, art = "https://i.ytimg.com/vi/${f.id}/hqdefault.jpg", format = "youtube").also(::remember)
++    }
++
+     fun find(title: String, artist: String): Song? {
+         // a version chosen by hand for these words (Versions): that one
+         app?.let { Versions.byWords(it, title, artist) }?.let { v ->
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
 index bdad89d..9044aa8 100644
 --- a/app/src/main/AndroidManifest.xml
@@ -984,7 +998,7 @@ index ea38ff7..07cd9d2 100644
          FilmGrain(Modifier.fillMaxSize())
      }
 diff --git a/app/src/main/java/app/ink/music/Import.kt b/app/src/main/java/app/ink/music/Import.kt
-index 94f663b..9d7147a 100644
+index 94f663b..880e17f 100644
 --- a/app/src/main/java/app/ink/music/Import.kt
 +++ b/app/src/main/java/app/ink/music/Import.kt
 @@ -27,15 +27,77 @@ object Import {
@@ -1082,6 +1096,28 @@ index 94f663b..9d7147a 100644
                  .takeIf { it.title.isNotBlank() }
          }
          return Listed(name, songs).takeIf { songs.isNotEmpty() }
+@@ -106,10 +170,19 @@ object Import {
+         songs.chunked(8).flatMap { batch ->
+             batch.map { s ->
+                 async(Dispatchers.IO) {
+-                    (mine[Radio.key(s.title, s.artist)] ?: if (YouTubeMusic.available) YouTubeMusic.find(s.title, s.artist)?.takeIf { same(it.artist, s.artist) } else null)
++                    (mine[Radio.key(s.title, s.artist)] ?: if (YouTubeMusic.available) tube(s) else null)
+                         .also { synchronized(this@Import) { done++; found(done) } }
+                 }
+             }.awaitAll()
+-        }
++        }.also { all -> android.util.Log.i("ink-import", "found ${all.count { it != null }} of ${songs.size}") }
+     }
++
++    /**
++     * YouTube Music's song of it (by the same artist), else a video of it on youtube.com (the editions', 2026-11-21): a Spotify local
++     * file (a video's sound, saved: no artist) is found by its title, and a song only ever up as a video by its words.
++     */
++    private fun tube(s: Said): Song? =
++        (if (s.artist.isNotBlank()) runCatching { YouTubeMusic.find(s.title, s.artist)?.takeIf { same(it.artist, s.artist) } }.getOrNull() else null)
++            ?: runCatching { YouTubeMusic.findVideo(s.title, s.artist) }.getOrNull()
++                ?.also { android.util.Log.i("ink-import", "\"${s.title}\": its video, \"${it.title}\"") }
+ }
 diff --git a/app/src/main/java/app/ink/music/Listen.kt b/app/src/main/java/app/ink/music/Listen.kt
 index 71e1295..0173e95 100644
 --- a/app/src/main/java/app/ink/music/Listen.kt
@@ -5983,7 +6019,7 @@ index 0000000..8fb8856
 +    suspend fun addNew(c: Context, key: String, songs: List<Import.Said>, found: List<Song?>): Int = 0
 +}
 diff --git a/app/src/play/java/app/ink/music/YouTubeMusic.kt b/app/src/play/java/app/ink/music/YouTubeMusic.kt
-index f38fe23..ef669e1 100644
+index f38fe23..2b63507 100644
 --- a/app/src/play/java/app/ink/music/YouTubeMusic.kt
 +++ b/app/src/play/java/app/ink/music/YouTubeMusic.kt
 @@ -8,6 +8,10 @@ object YouTubeMusic {
@@ -5997,6 +6033,14 @@ index f38fe23..ef669e1 100644
      suspend fun videos(q: String): List<Song> = emptyList()
      suspend fun album(a: TubeAlbum): List<Song> = emptyList()
      fun lyrics(id: String, title: String, artist: String): List<Line>? = emptyList()
+@@ -17,6 +21,7 @@ object YouTubeMusic {
+     fun warmUp(c: android.content.Context) {}
+     fun related(id: String): List<Song> = emptyList()
+     fun find(title: String, artist: String): Song? = null
++    fun findVideo(title: String, artist: String): Song? = null
+     fun moods(): List<TubeMood> = emptyList()
+     fun mood(params: String): List<Pair<String, List<TubeList>>> = emptyList()
+     fun moodStation(params: String): List<Song> = emptyList()
 diff --git a/core/src/commonMain/kotlin/app/ink/music/InkMap.kt b/core/src/commonMain/kotlin/app/ink/music/InkMap.kt
 index 1233007..930a18d 100644
 --- a/core/src/commonMain/kotlin/app/ink/music/InkMap.kt
@@ -11691,7 +11735,7 @@ index 0000000..0f7df48
 +open(os.path.join(OUT, "icon_preview_square.svg"), "w").write(svg(mask_circle=False))
 +print("written to", OUT)
 diff --git a/youtube/src/commonMain/kotlin/app/ink/music/TubeVideos.kt b/youtube/src/commonMain/kotlin/app/ink/music/TubeVideos.kt
-index 5fa8679..806cdd2 100644
+index 5fa8679..bcc89fb 100644
 --- a/youtube/src/commonMain/kotlin/app/ink/music/TubeVideos.kt
 +++ b/youtube/src/commonMain/kotlin/app/ink/music/TubeVideos.kt
 @@ -48,7 +48,8 @@ object TubeVideos {
@@ -11704,3 +11748,31 @@ index 5fa8679..806cdd2 100644
              // the grid's last item is what asks for more (the first continuationItemRenderer on the page): its token, if there's more. Not any
              // continuation on the page: the sort chips (latest, popular, oldest) have theirs too, and the last of those
              // answered the channel's front page, no videos (2026-11-12)
+@@ -118,6 +119,27 @@ object TubeVideos {
+ 
+     private fun plain(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
+ 
++    /**
++     * A video by its title (the editions', 2026-11-21: a Spotify playlist of local files, videos' sound saved as files, came in with no
++     * artist, a file's "_" for a "|", and none of 48 was found): the first of youtube.com's answers with the title's
++     * words in its own, any length. Three in four of them with no artist said; with one, three in five and the artist
++     * in its channel or its title. A one-word title with no artist only for a title of a few words, near the same.
++     */
++    fun byTitle(title: String, artist: String = ""): Found? {
++        val want = words(title)
++        if (want.isEmpty()) return null
++        val by = plain(artist)
++        val q = (if (artist.isBlank()) "" else "$artist ") + title.replace('_', ' ')
++        return search(q, 10).firstOrNull { f ->
++            val got = words(f.title)
++            val share = want.count { it in got } / want.size.toFloat()
++            if (by.isEmpty()) share >= .75f && (want.size >= 2 || got.size <= 3)
++            else share >= .6f && (plain(f.channel).let { c -> c.isNotEmpty() && (c.contains(by) || by.contains(c)) } || plain(f.title).contains(by))
++        }
++    }
++
++    private fun words(s: String) = s.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }.toSet()
++
+     private fun days(ago: String): Int {
+         val m = Regex("""(\d+) (second|minute|hour|day|week|month|year)s? ago""").find(ago) ?: return NEVER
+         val n = m.groupValues[1].toInt()

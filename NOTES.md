@@ -1,4 +1,2 @@
-- Your listening history, searches, likes, playlists and settings now survive an uninstall or a new phone: backed up to Downloads every two days, and by Android's own backup too. Settings → Listening → Your data to back up now or restore
-- Smoother: pages glide in on a spring, the player rises from the bottom like a sheet and drops back down
-- Vigil: darker, with a red light low on the street, heavier rain and fine grain
-- This update installs over the last one, nothing lost
+- Spotify playlists of local files (YouTube videos saved as songs, with no artist) now play: each is found as its video on YouTube. Open the Exportify file again to bring them in
+- A song that's only up on YouTube as a video, not on YouTube Music, is found too

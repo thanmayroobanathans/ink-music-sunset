@@ -170,10 +170,19 @@ object Import {
         songs.chunked(8).flatMap { batch ->
             batch.map { s ->
                 async(Dispatchers.IO) {
-                    (mine[Radio.key(s.title, s.artist)] ?: if (YouTubeMusic.available) YouTubeMusic.find(s.title, s.artist)?.takeIf { same(it.artist, s.artist) } else null)
+                    (mine[Radio.key(s.title, s.artist)] ?: if (YouTubeMusic.available) tube(s) else null)
                         .also { synchronized(this@Import) { done++; found(done) } }
                 }
             }.awaitAll()
-        }
+        }.also { all -> android.util.Log.i("ink-import", "found ${all.count { it != null }} of ${songs.size}") }
     }
+
+    /**
+     * YouTube Music's song of it (by the same artist), else a video of it on youtube.com (the editions', 2026-11-21): a Spotify local
+     * file (a video's sound, saved: no artist) is found by its title, and a song only ever up as a video by its words.
+     */
+    private fun tube(s: Said): Song? =
+        (if (s.artist.isNotBlank()) runCatching { YouTubeMusic.find(s.title, s.artist)?.takeIf { same(it.artist, s.artist) } }.getOrNull() else null)
+            ?: runCatching { YouTubeMusic.findVideo(s.title, s.artist) }.getOrNull()
+                ?.also { android.util.Log.i("ink-import", "\"${s.title}\": its video, \"${it.title}\"") }
 }
