@@ -130,12 +130,16 @@ object TubeVideos {
         if (want.isEmpty()) return null
         val by = plain(artist)
         val q = (if (artist.isBlank()) "" else "$artist ") + title.replace('_', ' ')
-        return search(q, 10).firstOrNull { f ->
+        // of those near enough, the closest (the same video, where it's there, over another of the same day's racing
+        // a place above it): the most words in common for all the words of the two; the higher answer on a tie
+        return search(q, 10).mapIndexedNotNull { i, f ->
             val got = words(f.title)
-            val share = want.count { it in got } / want.size.toFloat()
-            if (by.isEmpty()) share >= .75f && (want.size >= 2 || got.size <= 3)
-            else share >= .6f && (plain(f.channel).let { c -> c.isNotEmpty() && (c.contains(by) || by.contains(c)) } || plain(f.title).contains(by))
-        }
+            val both = want.count { it in got }
+            val share = both / want.size.toFloat()
+            val near = if (by.isEmpty()) share >= .75f && (want.size >= 2 || got.size <= 3)
+                else share >= .6f && (plain(f.channel).let { c -> c.isNotEmpty() && (c.contains(by) || by.contains(c)) } || plain(f.title).contains(by))
+            if (near) Triple(f, both / (want + got).size.toFloat(), i) else null
+        }.maxWithOrNull(compareBy<Triple<Found, Float, Int>> { it.second }.thenByDescending { it.third })?.first
     }
 
     private fun words(s: String) = s.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }.toSet()

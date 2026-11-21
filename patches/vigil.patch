@@ -11596,7 +11596,7 @@ index 0000000..5b0b1c5
 +    open(os.path.join(OUT, name), "w").write(text)
 +print("written to", OUT)
 diff --git a/youtube/src/commonMain/kotlin/app/ink/music/TubeVideos.kt b/youtube/src/commonMain/kotlin/app/ink/music/TubeVideos.kt
-index 5fa8679..bcc89fb 100644
+index 5fa8679..e66d8cf 100644
 --- a/youtube/src/commonMain/kotlin/app/ink/music/TubeVideos.kt
 +++ b/youtube/src/commonMain/kotlin/app/ink/music/TubeVideos.kt
 @@ -48,7 +48,8 @@ object TubeVideos {
@@ -11609,7 +11609,7 @@ index 5fa8679..bcc89fb 100644
              // the grid's last item is what asks for more (the first continuationItemRenderer on the page): its token, if there's more. Not any
              // continuation on the page: the sort chips (latest, popular, oldest) have theirs too, and the last of those
              // answered the channel's front page, no videos (2026-11-12)
-@@ -118,6 +119,27 @@ object TubeVideos {
+@@ -118,6 +119,31 @@ object TubeVideos {
  
      private fun plain(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
  
@@ -11624,12 +11624,16 @@ index 5fa8679..bcc89fb 100644
 +        if (want.isEmpty()) return null
 +        val by = plain(artist)
 +        val q = (if (artist.isBlank()) "" else "$artist ") + title.replace('_', ' ')
-+        return search(q, 10).firstOrNull { f ->
++        // of those near enough, the closest (the same video, where it's there, over another of the same day's racing
++        // a place above it): the most words in common for all the words of the two; the higher answer on a tie
++        return search(q, 10).mapIndexedNotNull { i, f ->
 +            val got = words(f.title)
-+            val share = want.count { it in got } / want.size.toFloat()
-+            if (by.isEmpty()) share >= .75f && (want.size >= 2 || got.size <= 3)
-+            else share >= .6f && (plain(f.channel).let { c -> c.isNotEmpty() && (c.contains(by) || by.contains(c)) } || plain(f.title).contains(by))
-+        }
++            val both = want.count { it in got }
++            val share = both / want.size.toFloat()
++            val near = if (by.isEmpty()) share >= .75f && (want.size >= 2 || got.size <= 3)
++                else share >= .6f && (plain(f.channel).let { c -> c.isNotEmpty() && (c.contains(by) || by.contains(c)) } || plain(f.title).contains(by))
++            if (near) Triple(f, both / (want + got).size.toFloat(), i) else null
++        }.maxWithOrNull(compareBy<Triple<Found, Float, Int>> { it.second }.thenByDescending { it.third })?.first
 +    }
 +
 +    private fun words(s: String) = s.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }.toSet()
