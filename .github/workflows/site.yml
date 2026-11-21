@@ -76,6 +76,15 @@ jobs:
           built=$(gh release view neon-coast-latest --repo "$GITHUB_REPOSITORY" --json assets \
             --jq '.assets[] | select(.name == "neon-coast.apk") | .updatedAt' | xargs -I{} date -u -d {} +'%-d %B %Y')
           sed -i "s|{{VERSION}}|$ver|g; s|{{SIZE}}|$size|g; s|{{SHA256}}|$sha|g; s|{{BUILT}}|$built|g" site/index.html
+          # what's new (the editions', 2026-11-21): NOTES.md's first line, under the download
+          python3 - NOTES.md site/index.html <<'PY'
+          import html, sys
+          notes = [l.strip()[1:].strip() for l in open(sys.argv[1], encoding="utf-8") if l.strip().startswith("-")]
+          first = notes[0] if notes else "a new build."
+          first = first if first.endswith((".", "!", "?")) else first + "."
+          page = open(sys.argv[2], encoding="utf-8").read().replace("{{NEW}}", html.escape(first))
+          open(sys.argv[2], "w", encoding="utf-8").write(page)
+          PY
           ! grep -n '{{' site/index.html
           echo "version $ver, $size, built $built"
 

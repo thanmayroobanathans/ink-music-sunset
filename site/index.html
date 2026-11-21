@@ -81,6 +81,7 @@ h1 .line { display: block; }
 .fine { margin: .9rem 0 0; font-size: .9rem; color: var(--soft); }
 .also { margin: .7rem 0 0; font-size: .95rem; color: var(--soft); max-width: 30rem; }
 .also a { color: var(--teal); }
+.also.new b { color: var(--teal); font-weight: 600; }
 .qr { display: none; }
 @media (min-width: 900px) and (hover: hover) {
   .qr { display: flex; gap: 1rem; align-items: center; margin-top: 2rem; color: var(--soft); max-width: 22rem; }
@@ -184,6 +185,7 @@ footer { border-top: 1px solid #3B2160; }
       Download for Android
     </a>
     <p class="fine">Version {{VERSION}}, {{SIZE}}. Android 12 or newer.</p>
+    <p class="also new"><b>New in this build:</b> {{NEW}} Already have it? Open the app and tap Update.</p>
     <p class="also">On an iPhone? <a href="app/">Open Neon Coast in your browser</a> and add it to your home screen. On a PC? <a href="https://github.com/thanmayroobanathans/ink-music-sunset/releases/download/neon-coast-latest/neon-coast.msi">Get it for Windows</a>.</p>
   </div>
   <div class="horizon" aria-hidden="true">

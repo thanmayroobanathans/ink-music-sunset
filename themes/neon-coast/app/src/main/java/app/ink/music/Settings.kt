@@ -111,6 +111,9 @@ fun SettingsPage(pages: Pages, part: String? = null) {
                     val said by Updates.said.collectAsState()
                     val offer by Updates.offer.collectAsState()
                     Word("check for an update", pixel(12.sp), Modifier.padding(top = 6.dp), touch = 8.dp) { Updates.check(ctx, now = true) }
+                    // (the editions', 2026-11-21) put in by themselves when nothing's playing, or asked about first
+                    val auto by Updates.autoOn.collectAsState()
+                    Word(if (auto) "updates install by themselves" else "updates ask first", pixel(12.sp, Ink.mid), Modifier.padding(top = 2.dp), touch = 8.dp) { Updates.setAuto(ctx, !auto) }
                     said?.let { BasicText(it, style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(top = 2.dp)) }
                     offer?.let { Spacer(Modifier.height(14.dp)); UpdateCard(it, side = 0.dp) }
                 }

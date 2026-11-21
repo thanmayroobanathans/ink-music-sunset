@@ -187,6 +187,7 @@ class Main : ComponentActivity() {
         HiddenLists.load(this)
         FollowedLists.load(this)
         PhoneLists.load(this)
+        runCatching { Updates.schedule(this) }
         Moving.start(this)
         Receiver.log = { android.util.Log.d("ink-receiver", it) }
         ListenBrainz.start(this)
@@ -236,6 +237,9 @@ class Main : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // a newer build looked for at every open (the editions', 2026-11-21), not only on listen
+        Updates.foreground = true
+        Updates.check(this)
         // your listening read again for the orders (lately, most, this hour: what was played since counts)
         Listened.read(this)
         Colours.start(this)
@@ -254,6 +258,7 @@ class Main : ComponentActivity() {
     }
 
     override fun onStop() {
+        Updates.foreground = false
         Fresh.left(this)
         SyncPhone.closed()
         Playback.release()
@@ -563,6 +568,8 @@ private fun App() {
                 Column {
                     // playing elsewhere too (the editions', 2026-11-21): its bar over this one's, seen and steered from here
                     if (!onTv() && elsewhere?.playing == true) RemoteMini(frost, elsewhere, onOpen = { remoteUp = true })
+                    // a newer build, wherever you are (the editions', 2026-11-21)
+                    if (!onTv()) UpdateBar()
                     MiniPlayer(frost, onOpen = { playerUp = true })
                 }
             }

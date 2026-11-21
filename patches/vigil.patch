@@ -32,6 +32,18 @@ index 674ba9d..877d33e 100644
      }
  
      // the key only where it's kept (Fedora); Windows' keystore.properties holds Last.fm's alone, its builds signed as debug ones
+diff --git a/app/src/full/AndroidManifest.xml b/app/src/full/AndroidManifest.xml
+index a286a38..6c1053d 100644
+--- a/app/src/full/AndroidManifest.xml
++++ b/app/src/full/AndroidManifest.xml
+@@ -17,5 +17,7 @@
+             android:windowSoftInputMode="adjustResize" />
+         <!-- what the phone's installer says about an update: ask, done, refused -->
+         <receiver android:name=".Updates$Installed" android:exported="false" />
++        <!-- the background's look for an update (the editions', 2026-11-21) -->
++        <service android:name=".UpdateJob" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="false" />
+     </application>
+ </manifest>
 diff --git a/app/src/full/java/app/ink/music/SpotifySignIn.kt b/app/src/full/java/app/ink/music/SpotifySignIn.kt
 index c0ceeab..ff26edd 100644
 --- a/app/src/full/java/app/ink/music/SpotifySignIn.kt
@@ -499,22 +511,174 @@ index 236e66d..45c7e64 100644
                                      val cookie = CookieManager.getInstance().getCookie(InnerTube.BASE) ?: return
                                      if ("SAPISID=" !in cookie) return
                                      taken = true
+diff --git a/app/src/full/java/app/ink/music/UpdateJob.kt b/app/src/full/java/app/ink/music/UpdateJob.kt
+new file mode 100644
+index 0000000..e58e415
+--- /dev/null
++++ b/app/src/full/java/app/ink/music/UpdateJob.kt
+@@ -0,0 +1,17 @@
++package app.ink.music
++
++import android.app.job.JobParameters
++import android.app.job.JobService
++
++/** The background's look for an update (the editions', 2026-11-21, [Updates.background]): every four hours, off the main thread. */
++class UpdateJob : JobService() {
++    override fun onStartJob(p: JobParameters): Boolean {
++        Thread {
++            runCatching { Updates.background(applicationContext) }.onFailure { android.util.Log.w("ink-update", "background: $it") }
++            jobFinished(p, false)
++        }.start()
++        return true
++    }
++
++    override fun onStopJob(p: JobParameters) = true
++}
 diff --git a/app/src/full/java/app/ink/music/Updates.kt b/app/src/full/java/app/ink/music/Updates.kt
-index 770e3f8..750a118 100644
+index 770e3f8..ff568e1 100644
 --- a/app/src/full/java/app/ink/music/Updates.kt
 +++ b/app/src/full/java/app/ink/music/Updates.kt
-@@ -26,7 +26,10 @@ import java.security.MessageDigest
+@@ -26,8 +26,16 @@ import java.security.MessageDigest
   * Most people never came back to GitHub: 619 took 1.4, a few dozen each release after it.
   */
  object Updates {
 -    private val LATEST = listOf("https://inkhome.app/download/latest.json", "https://api.github.com/repos/inkappdev/ink-music/releases/latest")
+-    private const val EVERY = 6 * 3_600_000L
 +    // (the editions', 2026-11-21) this edition's own: ink music's would offer ink music itself, which this isn't (another id, another
 +    // key). update.json sits beside the newest apk, shaped as a GitHub release (build.yml writes it, signed builds only);
 +    // a release download, not GitHub's API, so a hostel's worth of phones behind one address never hits its limit
 +    private val LATEST = listOf("https://github.com/thanmayroobanathans/ink-music-sunset/releases/download/vigil-latest/update.json")
-     private const val EVERY = 6 * 3_600_000L
++    // (the editions', 2026-11-21: "push it harder") an hour, not six: update.json is a release file, no limit to how often it's read
++    private const val EVERY = 3_600_000L
++    /** The app on screen now (Main's start and stop): the installer's question shown at once, else as a notification. */
++    @Volatile var foreground = false
++    /** Updates put in by themselves (settings), when one's down and nothing's playing: on unless turned off. */
++    val autoOn = MutableStateFlow(true)
      val offer = MutableStateFlow<Update?>(null)
      val step = MutableStateFlow<Updating>(Updating.Offered)
+     /** What a check asked for in settings found: "looking", "up to date", or why it couldn't look (null: nothing to say). */
+@@ -69,6 +77,100 @@ object Updates {
+         }
+     }
+ 
++    /**
++     * Looked for in the background too (the editions', 2026-11-21): every four hours, with a network; a newer one's APK comes down
++     * ahead on wifi (so UPDATE is at once), then it goes in by itself if that's allowed, nothing's playing and the
++     * phone lets the app update itself without asking (Android 12 on, once it's put one in); else a notification
++     * says it's ready.
++     */
++    fun schedule(c: Context) {
++        if (BuildConfig.DEBUG || !BuildConfig.UPDATER) return
++        autoOn.value = kept(c).optBoolean("auto", true)
++        val js = c.getSystemService(android.app.job.JobScheduler::class.java) ?: return
++        if (js.getPendingJob(JOB) != null) return
++        js.schedule(android.app.job.JobInfo.Builder(JOB, android.content.ComponentName(c, UpdateJob::class.java))
++            .setRequiredNetworkType(android.app.job.JobInfo.NETWORK_TYPE_ANY)
++            .setPeriodic(4 * 3_600_000L, 3_600_000L)
++            .build())
++    }
++    private const val JOB = 4711
++
++    fun setAuto(c: Context, on: Boolean) {
++        autoOn.value = on
++        scope.launch { runCatching { file(c).writeText(kept(c).put("auto", on).toString()) } }
++    }
++
++    /** What a release offers: newer than this, its APK (null: nothing to offer). */
++    private fun offerOf(r: JSONObject): Update? {
++        val version = r.optString("tag_name").removePrefix("v")
++        if (!newer(version, BuildConfig.VERSION_NAME)) return null
++        val assets = r.optJSONArray("assets") ?: return null
++        val all = (0 until assets.length()).map { assets.getJSONObject(it) }
++        val apk = all.firstOrNull { it.optString("name").let { n -> n.endsWith(".apk") && "play" !in n } } ?: return null
++        val notes = r.optString("body").lines().map { it.trim().removePrefix("-").trim().replace(asked, "") }.filter { it.isNotEmpty() }
++        return Update(version, notes, apk.getString("browser_download_url"), apk.getString("name"),
++            all.firstOrNull { it.optString("name") == "SHA256SUMS" }?.getString("browser_download_url"), apk.optLong("size"))
++    }
++
++    /** The APK for [u], down and checked already (the background's), or null. */
++    private fun ready(c: Context, u: Update): File? {
++        val apk = File(c.cacheDir, "update.apk")
++        if (!apk.exists() || kept(c).optString("ready") != u.version) return null
++        val want = u.sums?.let { s -> runCatching { get(s) }.getOrNull()?.lines()?.firstOrNull { it.trim().endsWith(u.name) }?.substringBefore(' ')?.trim() }
++        return apk.takeIf { want == null || want.equals(sha256(it), ignoreCase = true) }
++    }
++
++    /** The background's look (UpdateJob): blocking. */
++    fun background(c: Context) {
++        if (BuildConfig.DEBUG || !BuildConfig.UPDATER) return
++        val r = latest() ?: return
++        val k = kept(c)
++        file(c).writeText(k.put("at", System.currentTimeMillis()).put("seen", r).toString())
++        val u = offerOf(r) ?: return
++        if (u.version == k.optString("aside")) return
++        offer.value = u
++        val cm = c.getSystemService(android.net.ConnectivityManager::class.java)
++        val wifi = cm?.isActiveNetworkMetered == false
++        var apk = ready(c, u)
++        if (apk == null && wifi) runCatching {
++            val to = File(c.cacheDir, "update.apk")
++            download(u, to)
++            u.sums?.let { s ->
++                val want = get(s).lines().firstOrNull { it.trim().endsWith(u.name) }?.substringBefore(' ')?.trim()
++                if (want == null || !want.equals(sha256(to), ignoreCase = true)) error("the download doesn't match")
++            }
++            file(c).writeText(kept(c).put("ready", u.version).toString())
++            apk = to
++        }.onFailure { Log.w("ink-update", "background download: $it") }
++        val playing = c.getSystemService(android.media.AudioManager::class.java)?.isMusicActive == true
++        val own = runCatching { c.packageManager.getInstallSourceInfo(c.packageName).installingPackageName == c.packageName }.getOrDefault(false)
++        val down = apk
++        if (down != null && autoOn.value && kept(c).optBoolean("auto", true) && !playing && !foreground && own && android.os.Build.VERSION.SDK_INT >= 31) {
++            Log.i("ink-update", "putting ${u.version} in by itself")
++            runCatching { install(c, down) }.onFailure { notify(c, u, null) }
++        } else if (u.version != k.optString("told")) {
++            notify(c, u, null)
++            file(c).writeText(kept(c).put("told", u.version).toString())
++        }
++    }
++
++    /** "<app> <build> is ready": tapped, the app (its update over the mini player); [ask], the installer's own question. */
++    private fun notify(c: Context, u: Update, ask: Intent?) {
++        val nm = c.getSystemService(android.app.NotificationManager::class.java) ?: return
++        if (android.os.Build.VERSION.SDK_INT >= 33 && c.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
++        nm.createNotificationChannel(android.app.NotificationChannel("updates", "Updates", android.app.NotificationManager.IMPORTANCE_DEFAULT))
++        val app = c.applicationInfo.loadLabel(c.packageManager).toString()
++        val open = ask ?: (c.packageManager.getLaunchIntentForPackage(c.packageName) ?: return).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
++        val tap = PendingIntent.getActivity(c, 7, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
++        val build = u.version.substringAfterLast('.')
++        nm.notify(7, android.app.Notification.Builder(c, "updates")
++            .setSmallIcon(R.drawable.icon_sunset_mono)
++            .setContentTitle(if (ask != null) "Tap to finish updating $app" else "$app build $build is ready")
++            .setContentText(u.notes.firstOrNull() ?: "Tap to update")
++            .setStyle(android.app.Notification.BigTextStyle().bigText(u.notes.take(3).joinToString("\n") { "· $it" }))
++            .setContentIntent(tap).setAutoCancel(true).build())
++    }
++
+     fun notNow(c: Context) {
+         val u = offer.value ?: return
+         offer.value = null
+@@ -81,8 +183,7 @@ object Updates {
+         step.value = Updating.Down(0f)
+         scope.launch {
+             runCatching {
+-                val apk = File(c.cacheDir, "update.apk")
+-                download(u, apk)
++                val apk = ready(c, u) ?: File(c.cacheDir, "update.apk").also { download(u, it) }
+                 // the sum the release says, or no install: a cut-short download is caught here, not by the installer
+                 u.sums?.let { s ->
+                     val want = get(s).lines().firstOrNull { it.trim().endsWith(u.name) }?.substringBefore(' ')?.trim()
+@@ -140,7 +241,9 @@ object Updates {
+             when (val status = i.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
+                 PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                     @Suppress("DEPRECATION") val ask = i.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
+-                    c.startActivity(ask.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
++                    // the app away (the editions', 2026-11-21: put in from the background): the question waits in a notification
++                    if (!foreground) offer.value?.let { notify(c, it, ask.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } ?: Unit
++                    else c.startActivity(ask.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                 }
+                 PackageInstaller.STATUS_SUCCESS -> { offer.value = null; step.value = Updating.Offered }
+                 // turned down on the installer's screen: offered again, to install when it suits
 diff --git a/app/src/full/java/app/ink/music/YouTubeMusic.kt b/app/src/full/java/app/ink/music/YouTubeMusic.kt
 index 10e2758..3bf3845 100644
 --- a/app/src/full/java/app/ink/music/YouTubeMusic.kt
@@ -1175,7 +1339,7 @@ index 6396aeb..93a2427 100644
  /**
   * A song's heart, as on the desktop: 17% while not loved; loving it, red with a soft red glow for
 diff --git a/app/src/main/java/app/ink/music/Main.kt b/app/src/main/java/app/ink/music/Main.kt
-index dc12dfd..c86c9f4 100644
+index dc12dfd..a862d02 100644
 --- a/app/src/main/java/app/ink/music/Main.kt
 +++ b/app/src/main/java/app/ink/music/Main.kt
 @@ -159,9 +159,15 @@ class Main : ComponentActivity() {
@@ -1196,15 +1360,16 @@ index dc12dfd..c86c9f4 100644
          // a TV never stands upright: the manifest's portrait is the phone's
          Device.tv = isTv(this)
          if (isTv(this)) requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-@@ -180,6 +186,7 @@ class Main : ComponentActivity() {
+@@ -180,6 +186,8 @@ class Main : ComponentActivity() {
          YouTubeAccount.start(this)
          HiddenLists.load(this)
          FollowedLists.load(this)
 +        PhoneLists.load(this)
++        runCatching { Updates.schedule(this) }
          Moving.start(this)
          Receiver.log = { android.util.Log.d("ink-receiver", it) }
          ListenBrainz.start(this)
-@@ -195,7 +202,8 @@ class Main : ComponentActivity() {
+@@ -195,7 +203,8 @@ class Main : ComponentActivity() {
          Hints.start(this)
          SetHeard.start(this)
          Stations.curated(this)
@@ -1214,7 +1379,7 @@ index dc12dfd..c86c9f4 100644
          // the next song's cover (and the last's) ready before it plays (Covers.ahead)
          lifecycleScope.launch { Covers.ahead(this@Main) }
          // the genres opened most, their editors' songs read ahead (their pages open with them there)
-@@ -216,6 +224,7 @@ class Main : ComponentActivity() {
+@@ -216,6 +225,7 @@ class Main : ComponentActivity() {
      override fun onNewIntent(intent: android.content.Intent) {
          super.onNewIntent(intent)
          Computers.take(intent)
@@ -1222,7 +1387,25 @@ index dc12dfd..c86c9f4 100644
      }
  
      /** A TV's remote pressed with nothing focused (Compose then hears nothing): the first thing on screen takes focus. */
-@@ -295,6 +304,9 @@ sealed interface Page {
+@@ -227,6 +237,9 @@ class Main : ComponentActivity() {
+ 
+     override fun onStart() {
+         super.onStart()
++        // a newer build looked for at every open (the editions', 2026-11-21), not only on listen
++        Updates.foreground = true
++        Updates.check(this)
+         // your listening read again for the orders (lately, most, this hour: what was played since counts)
+         Listened.read(this)
+         Colours.start(this)
+@@ -245,6 +258,7 @@ class Main : ComponentActivity() {
+     }
+ 
+     override fun onStop() {
++        Updates.foreground = false
+         Fresh.left(this)
+         SyncPhone.closed()
+         Playback.release()
+@@ -295,6 +309,9 @@ sealed interface Page {
      data object Find : Page
      data object Settings : Page
      data class Playlist(val id: String, val name: String) : Page
@@ -1232,7 +1415,7 @@ index dc12dfd..c86c9f4 100644
      data class Tube(val album: TubeAlbum) : Page
      data class AddTo(val song: Song) : Page
      /** Several songs picked (Picking), into a playlist. */
-@@ -368,7 +380,7 @@ class Pages {
+@@ -368,7 +385,7 @@ class Pages {
  
  /** A page of browsing: one music leads to another from (an artist, a record, a playlist, YouTube's). */
  private fun Page.browsing() = this is Page.Artist || this is Page.TubeArtist || this is Page.Record || this is Page.Tube ||
@@ -1241,7 +1424,7 @@ index dc12dfd..c86c9f4 100644
  
  @Composable
  private fun App() {
-@@ -376,6 +388,10 @@ private fun App() {
+@@ -376,6 +393,10 @@ private fun App() {
      var allowed by remember { mutableStateOf(Library.allowed(ctx)) }
      val welcomed by Seeds.welcomed.collectAsState()
      LaunchedEffect(allowed) { if (allowed) Library.start(ctx) }
@@ -1252,7 +1435,7 @@ index dc12dfd..c86c9f4 100644
      // what plays found in the library once it's read (its cover, its record)
      val library by Library.songs.collectAsState()
      LaunchedEffect(library) { Playback.refresh() }
-@@ -384,6 +400,9 @@ private fun App() {
+@@ -384,6 +405,9 @@ private fun App() {
      // a computer's QR code read by the phone's own camera: its pairing page, on top (it pairs from there)
      val scanned by Computers.scanned.collectAsState()
      LaunchedEffect(scanned) { if (scanned != null && pages.stack.lastOrNull() != Page.HandOver) pages.open(Page.HandOver) }
@@ -1262,7 +1445,7 @@ index dc12dfd..c86c9f4 100644
      var playerUp by rememberSaveable { mutableStateOf(false) }
      // what plays on another device, opened from its bar ([RemotePlayerPage])
      var remoteUp by remember { mutableStateOf(false) }
-@@ -443,23 +462,25 @@ private fun App() {
+@@ -443,23 +467,25 @@ private fun App() {
                              Moves.less.value -> ContentTransform(fadeIn(tween(Motion.FADE)), fadeOut(tween(Motion.EXIT)))
                              // forward, page over page: the new one comes in on top (its rows then cascade), the old one
                              // stays whole under it till it's covered (both fading showed the library through them)
@@ -1294,7 +1477,7 @@ index dc12dfd..c86c9f4 100644
                                      fadeOut(tween(Motion.EXIT, easing = Motion.expo)),
                              )
                          }
-@@ -481,6 +502,8 @@ private fun App() {
+@@ -481,6 +507,8 @@ private fun App() {
                          // a TV's settings: one short page (TvSettingsPage)
                          Page.Settings -> if (onTv()) TvSettingsPage(pages) else SettingsPage(pages)
                          is Page.Playlist -> PlaylistPage(p.id, p.name, pages)
@@ -1303,7 +1486,7 @@ index dc12dfd..c86c9f4 100644
                          is Page.Tube -> TubeAlbumPage(p.album, pages)
                          is Page.AddTo -> AddToPage(p.song, pages)
                          is Page.AddToMany -> AddToList(p.songs, onDone = { pages.back(); Picking.clear() }, onClose = { pages.close() })
-@@ -536,20 +559,32 @@ private fun App() {
+@@ -536,20 +564,34 @@ private fun App() {
              // songs picked: what to do with them all, in the mini player's place
              if (picking && !playerUp) PickBar(pages)
              else if (!stopping && !sideways() && !playingNow && elsewhere != null) Box(if (onTv()) Modifier.covered(playerUp) else Modifier) { RemoteMini(frost, elsewhere, onOpen = { remoteUp = true }) }
@@ -1312,6 +1495,8 @@ index dc12dfd..c86c9f4 100644
 +                Column {
 +                    // playing elsewhere too (the editions', 2026-11-21): its bar over this one's, seen and steered from here
 +                    if (!onTv() && elsewhere?.playing == true) RemoteMini(frost, elsewhere, onOpen = { remoteUp = true })
++                    // a newer build, wherever you are (the editions', 2026-11-21)
++                    if (!onTv()) UpdateBar()
 +                    MiniPlayer(frost, onOpen = { playerUp = true })
 +                }
 +            }
@@ -1341,7 +1526,7 @@ index dc12dfd..c86c9f4 100644
          ) { remote?.let { RemotePlayerPage(it) { remoteUp = false } } }
      }
  }
-@@ -816,6 +851,8 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -816,6 +858,8 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
                      item { ListsView() }
                      item {
                          if (lovedIds.isNotEmpty()) ListRow("loved", "${lovedIds.size} ${if (lovedIds.size == 1) "song" else "songs"}", heart = true) { pages.open(Page.Loved) }
@@ -1350,7 +1535,7 @@ index dc12dfd..c86c9f4 100644
                          if (!tv) ListRow("your year", minutes?.let { if (it > 0) "%,d minutes so far".format(it) else "starts now" } ?: "") { pages.open(Page.Year) }
                          if (!tv) ListRow("ink mapped", if (Mapped.SOON) "coming soon" else "your listening as land, these days") { pages.open(Page.Mapped) }
                          // what's on the phone to play with no signal (your server's, YouTube's)
-@@ -826,7 +863,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -826,7 +870,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
                          // lists that fill themselves from rules (SmartLists), and a new one
                          SmartRows(pages)
                          Spacer(Modifier.height(10.dp))
@@ -1359,7 +1544,7 @@ index dc12dfd..c86c9f4 100644
                      }
                      items(lists, key = { it.id }) { pl ->
                          Column(Modifier.fillMaxWidth().clickable(remember { MutableInteractionSource() }, indication = null,
-@@ -894,7 +931,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -894,7 +938,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
                  verticalAlignment = Alignment.CenterVertically) {
                  androidx.compose.animation.AnimatedContent(tab, label = "place",
                      transitionSpec = { androidx.compose.animation.fadeIn(tween(Motion.ENTER, easing = Motion.expo)) togetherWith androidx.compose.animation.fadeOut(tween(Motion.EXIT)) },
@@ -1368,7 +1553,7 @@ index dc12dfd..c86c9f4 100644
                  Spacer(Modifier.width(10.dp))
                  // the menu's chevron: down while shut, up while open
                  val turn by androidx.compose.animation.core.animateFloatAsState(if (menu) 180f else 0f, tween(Motion.ENTER, easing = Motion.expo), label = "chevron")
-@@ -922,7 +959,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -922,7 +966,7 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
              }
              when (key) {
                  Hints.PULL -> Typed("pull down to find anything", pixel(12.sp, Ink.mid), hint)
@@ -1377,7 +1562,7 @@ index dc12dfd..c86c9f4 100644
                  Hints.ACROSS -> Typed("swipe across for the place beside", pixel(12.sp, Ink.mid), hint)
                  Hints.TURN -> Typed("turn your phone sideways for a wall of covers", pixel(12.sp, Ink.mid), hint)
                  Hints.ORDER -> Typed("tap an order to change it: year, color, lately", pixel(12.sp, Ink.mid), hint)
-@@ -934,6 +971,8 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -934,6 +978,8 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
              }
          }
        }
@@ -1386,7 +1571,7 @@ index dc12dfd..c86c9f4 100644
        Box(Modifier.fillMaxWidth().height(BAND).softEdge(tabsFrost, towardBottom = false))
      }
      // the places, dropped down under the word: big, the one you're on lit, each arriving in turn; a tap goes there (on
-@@ -954,14 +993,14 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -954,14 +1000,14 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
          ) {
              tabs.forEachIndexed { i, t ->
                  // a TV's screen is short: the places a size smaller, so all of them and settings sit above the mini player
@@ -1403,7 +1588,7 @@ index dc12dfd..c86c9f4 100644
              Word("your year", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size + 1, menu), touch = 8.dp) { menu = false; pages.open(Page.Year) }
              Word("ink mapped", pixel(14.sp, Ink.mid), Modifier.arrive(tabs.size + 2, menu), touch = 8.dp) { menu = false; pages.open(Page.Mapped) }
              // pairing a computer a tap from anywhere, not deep in settings; once one's paired, its name opens its setting
-@@ -1002,9 +1041,16 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
+@@ -1002,9 +1048,16 @@ private fun LibraryPage(pages: Pages, backHome: Boolean = false, onPlayer: () ->
      }
  }
  
@@ -1422,7 +1607,7 @@ index dc12dfd..c86c9f4 100644
  
  /**
   * The pager's fling, but none when it's still and on its page. A row of covers flung to its end hands the
-@@ -1183,7 +1229,7 @@ internal fun SongRow(s: Song, number: String? = null, pages: Pages? = null, onRe
+@@ -1183,7 +1236,7 @@ internal fun SongRow(s: Song, number: String? = null, pages: Pages? = null, onRe
              Word(if (s.id in lovedIds) "unlove" else "love", pixel(13.sp), touch = 8.dp) { open = false; Loved.toggle(s) }
              val account by Server.account.collectAsState()
              val tubeWho by YouTubeAccount.who.collectAsState()
@@ -1431,7 +1616,7 @@ index dc12dfd..c86c9f4 100644
                  Word("add to playlist", pixel(13.sp), touch = 8.dp) { open = false; pages.open(Page.AddTo(s)) }
              val sonic by Server.sonic.collectAsState()
              if (pages != null && sonic && account != null && Server.idOf(s) != null)
-@@ -1458,7 +1504,7 @@ private fun LovedPage(pages: Pages) {
+@@ -1458,7 +1511,7 @@ private fun LovedPage(pages: Pages) {
   * once (a second tap made a second playlist), then "open it".
   */
  @Composable
@@ -1440,7 +1625,7 @@ index dc12dfd..c86c9f4 100644
      val scope = rememberCoroutineScope()
      // where it's being made ("youtube", "server"), and once made, the page that opens it
      var making by remember(name, found) { mutableStateOf<String?>(null) }
-@@ -1467,7 +1513,7 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
+@@ -1467,7 +1520,7 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
      val who by YouTubeAccount.who.collectAsState()
      val account by Server.account.collectAsState()
      @Composable
@@ -1449,7 +1634,7 @@ index dc12dfd..c86c9f4 100644
          Spacer(Modifier.height(10.dp))
          when {
              made.containsKey(key) -> Row {
-@@ -1475,7 +1521,7 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
+@@ -1475,7 +1528,7 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
                  made[key]?.let { page -> Word("open it", pixel(14.sp), touch = 8.dp) { pages.open(page) } }
              }
              making == key -> BasicText("making it on $where", style = pixel(14.sp, Ink.dim), modifier = Modifier.padding(top = 8.dp))
@@ -1458,7 +1643,7 @@ index dc12dfd..c86c9f4 100644
                  if (making != null) return@Word
                  making = key
                  scope.launch {
-@@ -1486,8 +1532,21 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
+@@ -1486,8 +1539,21 @@ internal fun KeepIt(name: String, found: List<Song>, pages: Pages) {
              }
          }
      }
@@ -1481,7 +1666,7 @@ index dc12dfd..c86c9f4 100644
              ?: run { said = "youtube music didn't take it"; false to null }
      }
      if (account != null) Place("server", "your server") {
-@@ -1671,7 +1730,7 @@ private fun ArtistPage(name: String, pages: Pages, tubeId: String = "") {
+@@ -1671,7 +1737,7 @@ private fun ArtistPage(name: String, pages: Pages, tubeId: String = "") {
                      // as it is (or in the grain), a light photo held down so the name on it reads (nameDim)
                      if (!dithered && !xray && c != null) {
                          val dim = remember(c) { nameDim(c.image) }
@@ -1490,7 +1675,7 @@ index dc12dfd..c86c9f4 100644
                      }
                  }
                  else Box(Modifier.size(side).align(Alignment.Center))
-@@ -2096,18 +2155,29 @@ private fun ImportPage(pages: Pages) {
+@@ -2096,18 +2162,29 @@ private fun ImportPage(pages: Pages) {
      var progress by remember { mutableStateOf(0) }
      var matched by remember { mutableStateOf<List<Song?>?>(null) }
      var said by remember { mutableStateOf<String?>(null) }
@@ -1527,7 +1712,7 @@ index dc12dfd..c86c9f4 100644
      LaunchedEffect(spotifyAt) {
          if (!Spotify.ready()) return@LaunchedEffect
          if (theirs == null) theirs = Spotify.playlists() ?: run { said = "spotify didn't say. sign in again"; null }
-@@ -2115,7 +2185,7 @@ private fun ImportPage(pages: Pages) {
+@@ -2115,7 +2192,7 @@ private fun ImportPage(pages: Pages) {
              reading = 0
              val songs = Spotify.songs(w.id) { reading = it }
              reading = null; wanted = null
@@ -1536,7 +1721,7 @@ index dc12dfd..c86c9f4 100644
          }
      }
      fun open(w: Import.Theirs) {
-@@ -2125,7 +2195,7 @@ private fun ImportPage(pages: Pages) {
+@@ -2125,7 +2202,7 @@ private fun ImportPage(pages: Pages) {
              reading = 0
              val songs = Spotify.songs(w.id) { reading = it }
              reading = null; wanted = null
@@ -1545,7 +1730,7 @@ index dc12dfd..c86c9f4 100644
          } else Spotify.signIn(ctx)
      }
      LaunchedEffect(chosen) {
-@@ -2143,39 +2213,21 @@ private fun ImportPage(pages: Pages) {
+@@ -2143,39 +2220,21 @@ private fun ImportPage(pages: Pages) {
              BasicText((c?.name ?: "FROM SPOTIFY").uppercase(), style = headline(40.sp), maxLines = 3, overflow = TextOverflow.Ellipsis)
              Spacer(Modifier.height(10.dp))
              when {
@@ -1598,7 +1783,7 @@ index dc12dfd..c86c9f4 100644
                  }
                  m == null -> {
                      // a line filling as they're found, as the player's fills with the song
-@@ -2192,7 +2244,28 @@ private fun ImportPage(pages: Pages) {
+@@ -2192,7 +2251,28 @@ private fun ImportPage(pages: Pages) {
                      BasicText("${found.size} of ${c.songs.size} found   ${found.count { !it.tube }} yours", style = pixel(12.sp, Ink.mid))
                      Spacer(Modifier.height(16.dp))
                      Word("play it", pixel(14.sp), touch = 8.dp) { Playback.play(found, 0) }
@@ -1628,7 +1813,7 @@ index dc12dfd..c86c9f4 100644
                      said?.let { Spacer(Modifier.height(10.dp)); BasicText(it, style = pixel(12.sp, Ink.mid)) }
                      Spacer(Modifier.height(14.dp))
                  }
-@@ -2200,6 +2273,7 @@ private fun ImportPage(pages: Pages) {
+@@ -2200,6 +2280,7 @@ private fun ImportPage(pages: Pages) {
          }
          // your spotify playlists: one picked
          if (c == null && reading == null && lists == null) theirs?.let { all ->
@@ -1636,7 +1821,7 @@ index dc12dfd..c86c9f4 100644
              items(all, key = { it.id }) { l ->
                  Column(Modifier.fillMaxWidth().clickable(remember { MutableInteractionSource() }, indication = null, onClick = felt { open(l) }).padding(vertical = 9.dp)) {
                      BasicText(l.name.uppercase(), style = headline(22.sp), maxLines = 2, overflow = TextOverflow.Ellipsis)
-@@ -2296,7 +2370,7 @@ fun Dithered(photo: Song, modifier: Modifier, px: Int = 1080, print: Print = Pri
+@@ -2296,7 +2377,7 @@ fun Dithered(photo: Song, modifier: Modifier, px: Int = 1080, print: Print = Pri
      if (print == Print.CLEAR) return AsItIs(photo, modifier, px)
      val cover = rememberCover(photo, px)
      val density = LocalDensity.current
@@ -1645,7 +1830,7 @@ index dc12dfd..c86c9f4 100644
          val side = with(density) { maxWidth.toPx() }
          val frames by androidx.compose.runtime.produceState<List<androidx.compose.ui.graphics.ImageBitmap>?>(null, cover, print) {
              val c = cover ?: return@produceState
-@@ -2344,11 +2418,11 @@ private fun Xrayed(photo: Song, modifier: Modifier, px: Int = 1080) {
+@@ -2344,11 +2425,11 @@ private fun Xrayed(photo: Song, modifier: Modifier, px: Int = 1080) {
      LaunchedEffect(pic) {
          if (pic != null) { if (Moves.less.value) shown.snapTo(1f) else shown.animateTo(1f, tween(600, easing = Motion.expo)) }
      }
@@ -1659,7 +1844,7 @@ index dc12dfd..c86c9f4 100644
          }
      }
  }
-@@ -2375,7 +2449,7 @@ fun ArtistPhoto(photo: Song, modifier: Modifier) {
+@@ -2375,7 +2456,7 @@ fun ArtistPhoto(photo: Song, modifier: Modifier) {
  @Composable
  private fun AsItIs(photo: Song, modifier: Modifier, px: Int = 1080) {
      val cover = rememberCover(photo, px)
@@ -1668,7 +1853,7 @@ index dc12dfd..c86c9f4 100644
          cover?.let { Image(it.image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
      }
  }
-@@ -2419,19 +2493,47 @@ private object Searches {
+@@ -2419,19 +2500,47 @@ private object Searches {
  
  /**
   * YouTube Music's answer to what's typed, and to its words alone where it has symbols (YouTube can answer a title's
@@ -1726,7 +1911,7 @@ index dc12dfd..c86c9f4 100644
  }
  
  /** youtube.com's videos for what's typed and its words alone, together, best answers first. */
-@@ -2494,10 +2596,22 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2494,10 +2603,22 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
          seen[0] = forced
          value = online to forced
      }
@@ -1751,7 +1936,7 @@ index dc12dfd..c86c9f4 100644
      }
      // radio's stations by that name (ink radio's own first)
      val stations by androidx.compose.runtime.produceState(emptyList<Song>(), ask) {
-@@ -2506,7 +2620,11 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2506,7 +2627,11 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
      // youtube.com's own videos (the full build): songs never put on YouTube Music, apart from its songs; none it already gave
      val videosAll by androidx.compose.runtime.produceState(emptyList<Song>(), ask) {
          val text = ask?.first
@@ -1764,7 +1949,7 @@ index dc12dfd..c86c9f4 100644
      }
      // a YouTube video's id in what's typed ("[VDvX1hzGZN4]", as a file downloaded from YouTube is often named): that video
      val tubeId = if (pasted || !YouTubeMusic.available) null else Search.tubeId(raw)
-@@ -2517,6 +2635,26 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2517,6 +2642,26 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
      // a stream's own link pasted (not a service's): a station
      val streamed = remember(raw) { if (!pasted && RadioBrowser.isStream(raw)) Stations.of(RadioBrowser.pasted(raw)) else null }
      LaunchedEffect(Unit) { KeptStations.load(ctx) }
@@ -1791,7 +1976,7 @@ index dc12dfd..c86c9f4 100644
      val videos = remember(videosAll, tube, byId) {
          val have = (tube.songs.flatMap { listOf(it.id, Radio.key(it.title, it.artist)) } + listOfNotNull(byId?.id)).toSet()
          videosAll.filter { it.id !in have && Radio.key(it.title, it.artist) !in have }.take(12)
-@@ -2625,16 +2763,17 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2625,16 +2770,17 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
                  Box(row) { SongRow(s, pages = pages) { Playback.play(foundSongs, i) } }
              }
          }
@@ -1818,7 +2003,7 @@ index dc12dfd..c86c9f4 100644
          if (tubeArtists.isNotEmpty()) item {
              Label("artists on youtube music")
              LazyRow(Modifier.tvShelf(), state = tvRowState(), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-@@ -2656,9 +2795,18 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
+@@ -2656,9 +2802,18 @@ private fun FindPage(query: String, onQuery: (String) -> Unit, pages: Pages) {
              }
              Spacer(Modifier.height(10.dp))
          }
@@ -1840,7 +2025,7 @@ index dc12dfd..c86c9f4 100644
          }
          if (tube.lists.isNotEmpty()) item {
              Label("playlists on youtube music")
-@@ -2839,7 +2987,8 @@ private fun AddToPage(s: Song, pages: Pages) = AddToList(s, onDone = { pages.bac
+@@ -2839,7 +2994,8 @@ private fun AddToPage(s: Song, pages: Pages) = AddToList(s, onDone = { pages.bac
  fun canAddToList(s: Song?): Boolean {
      val account by Server.account.collectAsState()
      val who by YouTubeAccount.who.collectAsState()
@@ -1850,7 +2035,7 @@ index dc12dfd..c86c9f4 100644
  }
  
  /**
-@@ -2877,8 +3026,10 @@ fun AddToList(songs: List<Song>, onDone: (String) -> Unit, onClose: () -> Unit)
+@@ -2877,8 +3033,10 @@ fun AddToList(songs: List<Song>, onDone: (String) -> Unit, onClose: () -> Unit)
              BasicText(if (songs.size == 1) s.title.lowercase() else "${songs.size} songs", style = pixel(12.sp, Ink.mid), maxLines = 1, overflow = TextOverflow.Ellipsis)
              Spacer(Modifier.height(18.dp))
              if (failed) BasicText("that didn't take", style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(bottom = 8.dp))
@@ -1862,7 +2047,7 @@ index dc12dfd..c86c9f4 100644
                  NewPlaylist(s, focused = mine.isEmpty() && who == null, make = { Server.makePlaylist(it, onServer) }) { ok -> if (ok) onDone("a new playlist") else failed = true }
                  if (mine.isEmpty()) BasicText("no playlists of yours on your server yet: new > makes one, named as you type", style = pixel(12.sp, Ink.mid),
                      modifier = Modifier.padding(top = 6.dp))
-@@ -3345,7 +3496,7 @@ private fun ListsView() {
+@@ -3345,7 +3503,7 @@ private fun ListsView() {
  
  /** A list as a tile: its art square, its name and what it holds under it. */
  @Composable
@@ -1871,7 +2056,7 @@ index dc12dfd..c86c9f4 100644
      Column(Modifier.clickable(remember { MutableInteractionSource() }, indication = null, onClick = felt(then = onClick))) {
          Box(Modifier.fillMaxWidth().aspectRatio(1f).background(Ink.black)) {
              art()
-@@ -3359,7 +3510,7 @@ private fun ListTile(name: String, said: String, onClick: () -> Unit, heart: Boo
+@@ -3359,7 +3517,7 @@ private fun ListTile(name: String, said: String, onClick: () -> Unit, heart: Boo
  
  /** A list's art from its songs: four of its records' covers, two by two; fewer records, the first; none, its name. */
  @Composable
@@ -1880,7 +2065,7 @@ index dc12dfd..c86c9f4 100644
      val four = remember(songs) { songs.distinctBy { it.albumId }.take(4) }
      when {
          four.size == 4 -> Column(Modifier.fillMaxSize()) {
-@@ -3392,6 +3543,8 @@ private fun ListsTiles(pages: Pages, pad: PaddingValues, minutes: Long?) {
+@@ -3392,6 +3550,8 @@ private fun ListsTiles(pages: Pages, pad: PaddingValues, minutes: Long?) {
          (songs.filter { it.id in lovedIds } + lovedTube + liked).distinctBy { it.id }.sortedByDescending { Loved.lovedAt(it) ?: Long.MIN_VALUE }
      }
      val kept = remember(keptIds) { (keptIds.mapNotNull { Library.song(it) } + Offline.tubeSongs(ctx).filter { it.id in keptIds }).distinctBy { it.id } }
@@ -1889,7 +2074,7 @@ index dc12dfd..c86c9f4 100644
      LazyVerticalGrid(
          GridCells.Adaptive(150.dp), contentPadding = pad,
          horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(22.dp),
-@@ -3404,6 +3557,11 @@ private fun ListsTiles(pages: Pages, pad: PaddingValues, minutes: Long?) {
+@@ -3404,6 +3564,11 @@ private fun ListsTiles(pages: Pages, pad: PaddingValues, minutes: Long?) {
          if (lovedIds.isNotEmpty()) item(key = "loved") {
              ListTile("loved", "${lovedIds.size} ${if (lovedIds.size == 1) "song" else "songs"}", { pages.open(Page.Loved) }, heart = true) { Mosaic(loved, "loved") }
          }
@@ -1901,7 +2086,7 @@ index dc12dfd..c86c9f4 100644
          // (not on a TV: your year's a phone's thing, 2026-11-10)
          if (!Device.tv) item(key = "year") {
              ListTile("your year", minutes?.let { if (it > 0) "%,d minutes so far".format(it) else "starts now" } ?: "", { pages.open(Page.Year) }) {
-@@ -3451,7 +3609,7 @@ private fun ListsTiles(pages: Pages, pad: PaddingValues, minutes: Long?) {
+@@ -3451,7 +3616,7 @@ private fun ListsTiles(pages: Pages, pad: PaddingValues, minutes: Long?) {
   * it (the grey name cover read as a missing picture).
   */
  @Composable
@@ -1910,7 +2095,7 @@ index dc12dfd..c86c9f4 100644
      androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().background(Ink.black).border(1.dp, Ink.line)) {
          val size = with(androidx.compose.ui.platform.LocalDensity.current) { (maxWidth * .15f).toSp() }
          BasicText(name.uppercase(), style = headline(size).copy(lineHeight = size * 1.02f), maxLines = 4, overflow = TextOverflow.Ellipsis,
-@@ -3667,8 +3825,8 @@ private fun PickBar(pages: Pages) {
+@@ -3667,8 +3832,8 @@ private fun PickBar(pages: Pages) {
              // play next keeps them in the order picked: each put after the one before
              Word("play next", pixel(13.sp), touch = 8.dp) { picked.reversed().forEach { Playback.playNext(it) }; said = "PLAYING NEXT" }
              Word("add to queue", pixel(13.sp), touch = 8.dp) { picked.forEach { Playback.add(it) }; said = "QUEUED" }
@@ -1921,7 +2106,7 @@ index dc12dfd..c86c9f4 100644
              if (picked.any { it.id !in lovedIds }) Word("love", pixel(13.sp), touch = 8.dp) { picked.filter { it.id !in lovedIds }.forEach { Loved.toggle(it) }; said = "LOVED" }
              val keep = picked.filter { Offline.keepable(it) }
              if (keep.isNotEmpty()) Word("keep offline", pixel(13.sp), touch = 8.dp) { Offline.keep(ctx, keep); said = "KEEPING OFFLINE" }
-@@ -3896,7 +4054,7 @@ private fun TvRail(tabs: List<String>, tab: String, onPlace: (String) -> Unit, p
+@@ -3896,7 +4061,7 @@ private fun TvRail(tabs: List<String>, tab: String, onPlace: (String) -> Unit, p
      }
      // a little smaller, and scrolled if it must be, so settings stays above the mini player (it went under it)
      Column(Modifier.width(TV_RAIL).fillMaxHeight().padding(bottom = foot).verticalScroll(rememberScrollState()).padding(start = 28.dp, top = 24.dp, bottom = 12.dp)) {
@@ -2726,7 +2911,7 @@ index 9da9781..ea62400 100644
                              // the song playing there filling with its cover's color, as this phone's own queue does
                              if (i == r.index && r.length > 0 && !q.station) FilledTitle(q.title.uppercase(), tone, q, r.length, r.playing, r) { r.positionNow() }
 diff --git a/app/src/main/java/app/ink/music/Settings.kt b/app/src/main/java/app/ink/music/Settings.kt
-index 88425c2..78334a5 100644
+index 88425c2..fb4fdd0 100644
 --- a/app/src/main/java/app/ink/music/Settings.kt
 +++ b/app/src/main/java/app/ink/music/Settings.kt
 @@ -87,7 +87,7 @@ private val COG = listOf(
@@ -2738,7 +2923,17 @@ index 88425c2..78334a5 100644
      val account by Server.account.collectAsState()
      val count by Server.count.collectAsState()
      val syncing by Server.syncing.collectAsState()
-@@ -415,6 +415,25 @@ fun SettingsPage(pages: Pages, part: String? = null) {
+@@ -111,6 +111,9 @@ fun SettingsPage(pages: Pages, part: String? = null) {
+                     val said by Updates.said.collectAsState()
+                     val offer by Updates.offer.collectAsState()
+                     Word("check for an update", pixel(12.sp), Modifier.padding(top = 6.dp), touch = 8.dp) { Updates.check(ctx, now = true) }
++                    // (the editions', 2026-11-21) put in by themselves when nothing's playing, or asked about first
++                    val auto by Updates.autoOn.collectAsState()
++                    Word(if (auto) "updates install by themselves" else "updates ask first", pixel(12.sp, Ink.mid), Modifier.padding(top = 2.dp), touch = 8.dp) { Updates.setAuto(ctx, !auto) }
+                     said?.let { BasicText(it, style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(top = 2.dp)) }
+                     offer?.let { Spacer(Modifier.height(14.dp)); UpdateCard(it, side = 0.dp) }
+                 }
+@@ -415,6 +418,25 @@ fun SettingsPage(pages: Pages, part: String? = null) {
                      val fm by LastFm.account.collectAsState()
                      SettingRow("LAST.FM", fm?.name?.lowercase() ?: "connect", opened) { LastFmSetting(head = false) }
                  }
@@ -2764,7 +2959,7 @@ index 88425c2..78334a5 100644
                  RowsEnd()
              }
  
-@@ -816,9 +835,9 @@ fun TvSettingsPage(pages: Pages) {
+@@ -816,9 +838,9 @@ fun TvSettingsPage(pages: Pages) {
      ) {
          item {
              Column(Modifier.widthIn(max = 640.dp)) {
@@ -3226,6 +3421,58 @@ index a1fdd8a..f940688 100644
              }
          }
      }
+diff --git a/app/src/main/java/app/ink/music/UpdateCard.kt b/app/src/main/java/app/ink/music/UpdateCard.kt
+index 23ff483..c4419fa 100644
+--- a/app/src/main/java/app/ink/music/UpdateCard.kt
++++ b/app/src/main/java/app/ink/music/UpdateCard.kt
+@@ -4,6 +4,7 @@ import androidx.compose.animation.animateContentSize
+ import androidx.compose.animation.core.animateFloatAsState
+ import androidx.compose.animation.core.tween
+ import androidx.compose.foundation.background
++import androidx.compose.foundation.border
+ import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Row
+@@ -50,7 +51,7 @@ fun UpdateCard(u: Update, side: androidx.compose.ui.unit.Dp = 20.dp) {
+     var all by remember(u.version) { mutableStateOf(false) }
+     val shown = if (all) u.notes else u.notes.take(3)
+     Column(Modifier.fillMaxWidth().padding(horizontal = side).padding(top = 4.dp, bottom = 22.dp).animateContentSize(tween(Motion.ENTER, easing = Motion.expo))) {
+-        BasicText("new ink music", style = pixel(12.sp, Ink.mid))
++        BasicText("new " + remember { ctx.applicationInfo.loadLabel(ctx.packageManager).toString().lowercase() }, style = pixel(12.sp, Ink.mid))
+         BasicText(u.version, style = headline(44.sp), maxLines = 1, modifier = Modifier.padding(top = 2.dp, bottom = 8.dp))
+         shown.forEach { BasicText(it.lowercase(), style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(bottom = 5.dp)) }
+         if (!all && u.notes.size > 3) Word("${u.notes.size - 3} more", pixel(12.sp, Ink.mid), Modifier.offset(x = (-4).dp), touch = 8.dp) { all = true }
+@@ -81,3 +82,30 @@ fun UpdateCard(u: Update, side: androidx.compose.ui.unit.Dp = 20.dp) {
+             style = pixel(12.sp, Ink.mid), modifier = Modifier.padding(top = 8.dp))
+     }
+ }
++
++/**
++ * A newer build over the mini player, wherever you are (the editions', 2026-11-21: "push it harder"; listen's card alone went unseen by
++ * anyone who opened the app on their library): the build, its first line new, UPDATE and not now; then how it's going.
++ */
++@Composable
++fun UpdateBar() {
++    val ctx = LocalContext.current
++    val u = Updates.offer.collectAsState().value ?: return
++    val step by Updates.step.collectAsState()
++    Row(Modifier.fillMaxWidth().background(Ink.black).border(1.dp, Ink.line).padding(start = 20.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
++        verticalAlignment = Alignment.CenterVertically) {
++        Column(Modifier.weight(1f)) {
++            BasicText("BUILD ${u.version.substringAfterLast('.')} IS READY", style = headline(17.sp), maxLines = 1)
++            u.notes.firstOrNull()?.let { BasicText(it.lowercase(), style = pixel(11.sp, Ink.mid), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
++        }
++        when (val s = step) {
++            is Updating.Down -> BasicText("${(s.part * 100).toInt()}%", style = pixel(13.sp), modifier = Modifier.padding(start = 12.dp))
++            Updating.Asking -> BasicText("installing", style = pixel(13.sp), modifier = Modifier.padding(start = 12.dp))
++            is Updating.Failed -> Word("try again", pixel(13.sp), Modifier.padding(start = 12.dp), touch = 8.dp) { Updates.take(ctx) }
++            Updating.Offered -> {
++                Word("not now", pixel(12.sp, Ink.mid), Modifier.padding(start = 12.dp), touch = 8.dp) { Updates.notNow(ctx) }
++                Word("UPDATE", headline(17.sp), Modifier.padding(start = 16.dp), touch = 8.dp) { Updates.take(ctx) }
++            }
++        }
++    }
++}
 diff --git a/app/src/main/java/app/ink/music/Watch.kt b/app/src/main/java/app/ink/music/Watch.kt
 index 966bfb7..790e43b 100644
 --- a/app/src/main/java/app/ink/music/Watch.kt
@@ -5945,6 +6192,19 @@ index 0000000..8fb8856
 +    fun pending(c: Context, key: String, songs: List<Import.Said>): Int? = null
 +    suspend fun addNew(c: Context, key: String, songs: List<Import.Said>, found: List<Song?>): Int = 0
 +}
+diff --git a/app/src/play/java/app/ink/music/Updates.kt b/app/src/play/java/app/ink/music/Updates.kt
+index aa752ed..cc1d6c2 100644
+--- a/app/src/play/java/app/ink/music/Updates.kt
++++ b/app/src/play/java/app/ink/music/Updates.kt
+@@ -12,4 +12,8 @@ object Updates {
+     fun check(c: android.content.Context, now: Boolean = false) {}
+     fun notNow(c: android.content.Context) {}
+     fun take(c: android.content.Context) {}
++    var foreground = false
++    val autoOn = MutableStateFlow(false)
++    fun schedule(c: android.content.Context) {}
++    fun setAuto(c: android.content.Context, on: Boolean) {}
+ }
 diff --git a/app/src/play/java/app/ink/music/YouTubeMusic.kt b/app/src/play/java/app/ink/music/YouTubeMusic.kt
 index f38fe23..2b63507 100644
 --- a/app/src/play/java/app/ink/music/YouTubeMusic.kt

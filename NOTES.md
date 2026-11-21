@@ -1,3 +1,4 @@
-- Playlists on your phone: make as many as you like, no sign-in. Lists → + new playlist, or hold any song → add to playlist and tick the ones it goes in
-- Each playlist has its own page: big cover (your own picture if you like), play and shuffle, add songs, edit to drag songs into order, find, sort, pin, send it to a friend, and songs like these to add
-- A Spotify playlist you bring in can be kept on the phone; bring it in again and only its new songs are added
+- Playlists on your phone, no sign-in: Lists → + new playlist, or hold any song → add to playlist
+- Updates come faster: looked for every time you open the app, a notification when one's ready, and a bar over the player wherever you are
+- Updates install by themselves when nothing's playing (Settings → updates ask first, to turn it off)
+- Each playlist has its own page: cover, play, shuffle, add songs, drag into order, find, sort, pin, send to a friend
