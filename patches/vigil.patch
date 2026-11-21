@@ -1,8 +1,8 @@
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index 674ba9d..a36cebb 100644
+index 674ba9d..877d33e 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
-@@ -16,12 +16,13 @@ android {
+@@ -16,12 +16,16 @@ android {
      compileSdk = 37
  
      defaultConfig {
@@ -12,13 +12,17 @@ index 674ba9d..a36cebb 100644
          minSdk = 30
          targetSdk = 37
          // each release: both up (the code by one), and a changelog in fastlane/.../changelogs/<code>.txt
-         versionCode = 77
+-        versionCode = 77
 -        versionName = "2.1.26"
++        // (the editions', 2026-11-21) each build of the edition its own number, past the last, so a phone takes it as an update:
++        // ink music's (77) then GitHub's run number, 770033 for build 33; the name ends ".33" (versionNameSuffix)
++        versionCode = 77 * 10000 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
++        versionNameSuffix = System.getenv("GITHUB_RUN_NUMBER")?.let { ".$it" }
 +        versionName = "2.1.26-vigil"
          // ink weekly's weeks (tools/weekly.py writes them); -PweeklyUrl=... to try a week before it's pushed
          val weekly = (project.findProperty("weeklyUrl") as String?) ?: "https://inkhome.app/weekly.json"
          buildConfigField("String", "WEEKLY", "\"$weekly\"")
-@@ -29,7 +30,8 @@ android {
+@@ -29,7 +33,8 @@ android {
          buildConfigField("String", "LASTFM_KEY", "\"${release?.getProperty("lastfmKey").orEmpty()}\"")
          buildConfigField("String", "LASTFM_SECRET", "\"${release?.getProperty("lastfmSecret").orEmpty()}\"")
          // -Pfdroid: F-Droid's build, which F-Droid keeps up to date itself: no looking at GitHub for a new version
@@ -495,6 +499,22 @@ index 236e66d..45c7e64 100644
                                      val cookie = CookieManager.getInstance().getCookie(InnerTube.BASE) ?: return
                                      if ("SAPISID=" !in cookie) return
                                      taken = true
+diff --git a/app/src/full/java/app/ink/music/Updates.kt b/app/src/full/java/app/ink/music/Updates.kt
+index 770e3f8..750a118 100644
+--- a/app/src/full/java/app/ink/music/Updates.kt
++++ b/app/src/full/java/app/ink/music/Updates.kt
+@@ -26,7 +26,10 @@ import java.security.MessageDigest
+  * Most people never came back to GitHub: 619 took 1.4, a few dozen each release after it.
+  */
+ object Updates {
+-    private val LATEST = listOf("https://inkhome.app/download/latest.json", "https://api.github.com/repos/inkappdev/ink-music/releases/latest")
++    // (the editions', 2026-11-21) this edition's own: ink music's would offer ink music itself, which this isn't (another id, another
++    // key). update.json sits beside the newest apk, shaped as a GitHub release (build.yml writes it, signed builds only);
++    // a release download, not GitHub's API, so a hostel's worth of phones behind one address never hits its limit
++    private val LATEST = listOf("https://github.com/thanmayroobanathans/ink-music-sunset/releases/download/vigil-latest/update.json")
+     private const val EVERY = 6 * 3_600_000L
+     val offer = MutableStateFlow<Update?>(null)
+     val step = MutableStateFlow<Updating>(Updating.Offered)
 diff --git a/app/src/full/java/app/ink/music/YouTubeMusic.kt b/app/src/full/java/app/ink/music/YouTubeMusic.kt
 index 10e2758..ef7a9fe 100644
 --- a/app/src/full/java/app/ink/music/YouTubeMusic.kt

@@ -69,7 +69,10 @@ jobs:
           f=apk/neon-coast.apk
           size=$(python3 -c 'import os, sys; print(f"{os.path.getsize(sys.argv[1]) / 1048576:.1f} MB")' "$f")
           sha=$(sha256sum "$f" | cut -d' ' -f1)
-          ver=$(grep -oE 'versionName = "[^"]+"' themes/neon-coast/app/build.gradle.kts | cut -d'"' -f2)
+          # the newest signed build's own version (its update.json), else the theme's
+          ver=$(gh release download neon-coast-latest --pattern update.json --output - --repo "$GITHUB_REPOSITORY" 2>/dev/null \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])' 2>/dev/null) \
+            || ver=$(grep -oE 'versionName = "[^"]+"' themes/neon-coast/app/build.gradle.kts | cut -d'"' -f2)
           built=$(gh release view neon-coast-latest --repo "$GITHUB_REPOSITORY" --json assets \
             --jq '.assets[] | select(.name == "neon-coast.apk") | .updatedAt' | xargs -I{} date -u -d {} +'%-d %B %Y')
           sed -i "s|{{VERSION}}|$ver|g; s|{{SIZE}}|$size|g; s|{{SHA256}}|$sha|g; s|{{BUILT}}|$built|g" site/index.html

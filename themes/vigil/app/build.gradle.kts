@@ -21,7 +21,10 @@ android {
         minSdk = 30
         targetSdk = 37
         // each release: both up (the code by one), and a changelog in fastlane/.../changelogs/<code>.txt
-        versionCode = 77
+        // (the editions', 2026-11-21) each build of the edition its own number, past the last, so a phone takes it as an update:
+        // ink music's (77) then GitHub's run number, 770033 for build 33; the name ends ".33" (versionNameSuffix)
+        versionCode = 77 * 10000 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
+        versionNameSuffix = System.getenv("GITHUB_RUN_NUMBER")?.let { ".$it" }
         versionName = "2.1.26-vigil"
         // ink weekly's weeks (tools/weekly.py writes them); -PweeklyUrl=... to try a week before it's pushed
         val weekly = (project.findProperty("weeklyUrl") as String?) ?: "https://inkhome.app/weekly.json"

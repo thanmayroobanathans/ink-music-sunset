@@ -1,0 +1,5 @@
+- Steer your phone from your laptop, and your laptop from your phone: play, pause, skip, jump to a point, the volume, any song in the queue
+- What plays on the other one shows here, whatever plays where
+- Songs from YouTube Music kept on the phone as they play: played again, they start at once, seek at once and cost no data
+- Spotify playlists through Exportify, a whole "export all" zip too
+- The app for Windows: on the website
