@@ -399,9 +399,9 @@ jobs:
     # an unsigned .ipa to sideload (AltStore, SideStore, Sideloadly sign it with your own Apple ID), and a run in the
     # iPhone simulator, photographed
     name: iphone ${{ matrix.edition.name }}
-    # by hand only (Actions > Build the editions > Run workflow): iPhones get the web app (site/app/); this ipa is
-    # for sideloading, and its simulator run doesn't link yet. Not after the phones' build: it's the slowest
-    if: github.event_name == 'workflow_dispatch'
+    # for sideloading, and its simulator run doesn't link yet
+    # parked: iPhones were left out (2026-11-21); kept for if they're wanted again (a repo variable IPHONE=yes)
+    if: vars.IPHONE == 'yes'
     runs-on: macos-15
     timeout-minutes: 90
     strategy:
